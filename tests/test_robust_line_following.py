@@ -7,7 +7,9 @@ from POC.POC_1_2.robust_line_following import (
     LineDebouncer,
     LineFollowerController,
     Observation,
+    PROJECT_LIBRARY_DIRECTORY,
     RobotConfig,
+    build_argument_parser,
 )
 
 
@@ -44,6 +46,21 @@ def observation(
 
 
 class LineFollowerControllerTests(unittest.TestCase):
+    def test_pi_script_defaults_match_supplied_robot_configuration(self) -> None:
+        args = build_argument_parser().parse_args([])
+        self.assertEqual(args.drive_motor_1_port, "C")
+        self.assertEqual(args.drive_motor_2_port, "D")
+        self.assertEqual(args.steering_motor_port, "B")
+        self.assertEqual(args.left_line_pin, 26)
+        self.assertEqual(args.right_line_pin, 22)
+        self.assertEqual(args.drive_motor_2_direction, -1)
+        self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
+
+    def test_course_library_is_found_from_repository_layout(self) -> None:
+        self.assertIsNotNone(PROJECT_LIBRARY_DIRECTORY)
+        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "buildhat" / "__init__.py").is_file())
+        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "basehat" / "LineFinder.py").is_file())
+
     def test_line_debouncer_rejects_a_short_change(self) -> None:
         debouncer = LineDebouncer(0.025)
         self.assertEqual(debouncer.update(True, True, 0.0), (True, True))

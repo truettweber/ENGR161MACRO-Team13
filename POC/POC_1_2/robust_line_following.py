@@ -34,13 +34,77 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Sequence, TextIO
+from typing import NoReturn, Optional, Sequence, TextIO
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-LIBRARY_DIRECTORY = REPOSITORY_ROOT / "lib"
-if str(LIBRARY_DIRECTORY) not in sys.path:
-    sys.path.insert(0, str(LIBRARY_DIRECTORY))
+SCRIPT_PATH = Path(__file__).resolve()
+
+
+def project_library_candidates() -> list[Path]:
+    """Return likely locations of the course-provided ``lib`` directory.
+
+    Students commonly run this file from the repository, copy it to the
+    repository root, or open a copy from the Raspberry Pi desktop. Do not rely
+    on one fixed number of parent directories.
+    """
+
+    candidates: list[Path] = []
+    for starting_directory in (SCRIPT_PATH.parent, Path.cwd().resolve()):
+        for directory in (starting_directory, *starting_directory.parents):
+            candidates.append(directory / "lib")
+
+    home = Path.home()
+    candidates.extend(
+        (
+            home / "Desktop" / "lib",
+            home / "Desktop" / "ENGR161MACRO-Team13" / "lib",
+            home / "ENGR161MACRO-Team13" / "lib",
+        )
+    )
+
+    unique_candidates: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def is_project_library(directory: Path) -> bool:
+    return (
+        (directory / "buildhat" / "__init__.py").is_file()
+        and (directory / "basehat" / "LineFinder.py").is_file()
+        and (directory / "basehat" / "IMUSensor.py").is_file()
+    )
+
+
+def configure_project_library(explicit_directory: Optional[Path] = None) -> Optional[Path]:
+    """Add the course library to ``sys.path`` and return its resolved path."""
+
+    if explicit_directory is not None:
+        candidate = explicit_directory.expanduser().resolve()
+        if not is_project_library(candidate):
+            raise ValueError(
+                f"{candidate} is not the project lib directory; expected "
+                "buildhat/__init__.py, basehat/LineFinder.py, and "
+                "basehat/IMUSensor.py inside it"
+            )
+        selected = candidate
+    else:
+        selected = next(
+            (
+                candidate
+                for candidate in project_library_candidates()
+                if is_project_library(candidate)
+            ),
+            None,
+        )
+
+    if selected is not None and str(selected) not in sys.path:
+        sys.path.insert(0, str(selected))
+    return selected
+
+
+PROJECT_LIBRARY_DIRECTORY = configure_project_library()
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
@@ -646,12 +710,23 @@ class HardwareRobot:
 
         try:
             from buildhat import Motor
-            from basehat.IMUSensor import IMUSensor
+        except ImportError as error:
+            self._raise_import_error("Build HAT motor driver", error)
+
+        try:
             from basehat.LineFinder import LineFinder
         except ImportError as error:
+            self._raise_import_error("Grove line-finder driver", error)
+
+        try:
+            from basehat.IMUSensor import IMUSensor
+        except ImportError as error:
+            self._raise_import_error("Grove IMU Python driver", error)
+        except SystemExit as error:
             raise RuntimeError(
-                "Unable to import the supplied Build HAT/Base HAT libraries. "
-                "Run this program on the configured project Raspberry Pi."
+                "The Grove IMU driver was found, but its native libakicm.so "
+                "library could not be loaded. Restore/install the course IMU "
+                "driver on the Raspberry Pi before running the robot."
             ) from error
 
         print("Initializing Build HAT motors; this can take about 10 seconds...")
@@ -680,6 +755,22 @@ class HardwareRobot:
 
         self.stop_all()
         self._initialize_encoder_reference()
+
+    @staticmethod
+    def _raise_import_error(component: str, error: ImportError) -> NoReturn:
+        missing_module = getattr(error, "name", None) or "unknown"
+        selected = (
+            str(PROJECT_LIBRARY_DIRECTORY)
+            if PROJECT_LIBRARY_DIRECTORY is not None
+            else "none found automatically"
+        )
+        raise RuntimeError(
+            f"Unable to import the {component}; missing module: "
+            f"{missing_module!r}. Project library directory: {selected}. "
+            "Keep the full repository together or pass "
+            "--library-directory /path/to/ENGR161MACRO-Team13/lib. "
+            f"Original import error: {error}"
+        ) from error
 
     @staticmethod
     def _motor_values(motor: object) -> tuple[float, float, float]:
@@ -950,19 +1041,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Robust solid, dashed, curved, and obstacle line following"
     )
-    parser.add_argument("--drive-motor-1-port", required=True, choices="ABCD")
-    parser.add_argument("--drive-motor-2-port", required=True, choices="ABCD")
-    parser.add_argument("--steering-motor-port", required=True, choices="ABCD")
-    parser.add_argument("--left-line-pin", required=True, type=int)
-    parser.add_argument("--right-line-pin", required=True, type=int)
+    parser.add_argument("--drive-motor-1-port", choices="ABCD", default="C")
+    parser.add_argument("--drive-motor-2-port", choices="ABCD", default="D")
+    parser.add_argument("--steering-motor-port", choices="ABCD", default="B")
+    parser.add_argument("--left-line-pin", type=int, default=26)
+    parser.add_argument("--right-line-pin", type=int, default=22)
     parser.add_argument(
         "--inches-per-motor-rotation",
-        required=True,
         type=float,
+        default=9.74,
         help="measured straight-line vehicle travel for 360 drive-motor degrees",
     )
     parser.add_argument("--drive-motor-1-direction", type=require_direction, default=1)
-    parser.add_argument("--drive-motor-2-direction", type=require_direction, default=1)
+    parser.add_argument("--drive-motor-2-direction", type=require_direction, default=-1)
     parser.add_argument(
         "--steering-direction",
         type=require_direction,
@@ -978,6 +1069,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pitch-direction", type=require_direction, default=1)
     parser.add_argument("--roll-direction", type=require_direction, default=1)
     parser.add_argument(
+        "--library-directory",
+        type=Path,
+        help="path to the course-provided lib directory; normally auto-detected",
+    )
+    parser.add_argument(
         "--log-file",
         type=Path,
         help="CSV output path; defaults to /tmp with a timestamp",
@@ -992,6 +1088,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> int:
+    global PROJECT_LIBRARY_DIRECTORY
+    if args.library_directory is not None:
+        PROJECT_LIBRARY_DIRECTORY = configure_project_library(args.library_directory)
+
     config = RobotConfig()
     hardware_config = HardwareConfig(
         drive_motor_1_port=args.drive_motor_1_port,

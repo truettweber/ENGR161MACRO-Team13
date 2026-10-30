@@ -39,7 +39,16 @@ value because the course permits broken-line gaps up to 3 inches.
 
 ## Run
 
-Supply the final ports and measured distance at launch:
+The current robot values from the team's Pi script are defaults: drive motors
+C and D, steering motor B, left line finder D26, right line finder D22, 9.74
+inches per drive-motor rotation, and reversed direction for drive motor D.
+Running without arguments uses those values:
+
+```text
+python3 POC/POC_1_2/robust_line_following.py
+```
+
+They can still be overridden at launch:
 
 ```text
 python3 POC/POC_1_2/robust_line_following.py \
@@ -51,8 +60,7 @@ python3 POC/POC_1_2/robust_line_following.py \
   --inches-per-motor-rotation MEASURED_VALUE
 ```
 
-The example ports are placeholders. If a motor or IMU axis is reversed, add
-the relevant option with `-1`:
+If another motor or IMU axis is reversed, add the relevant option with `-1`:
 
 ```text
 --drive-motor-1-direction -1
@@ -65,6 +73,23 @@ the relevant option with `-1`:
 
 The steering sign must make a positive steering target turn the vehicle right.
 The yaw sign must make a physical right turn produce positive yaw.
+
+## Import troubleshooting
+
+Keep this script inside the full repository. The program searches its own
+ancestors, the current working directory's ancestors, and common Raspberry Pi
+Desktop locations for the course-provided `lib` directory. Copying only the
+Python file discards the supplied `basehat` and vendored `buildhat` drivers.
+
+If the repository or library has a different location, specify it explicitly:
+
+```text
+python3 Poc_task1.py --library-directory /full/path/to/ENGR161MACRO-Team13/lib
+```
+
+Import failures now identify the exact missing module. If the error names
+`libakicm.so`, the Python files were found but the native course IMU driver is
+missing from the Raspberry Pi installation.
 
 Run data is written by default to a timestamped CSV file under `/tmp`. Use
 `--log-file PATH` to retain it elsewhere. Press Ctrl+C for the manual stop; the
