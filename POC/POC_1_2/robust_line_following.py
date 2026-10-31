@@ -72,6 +72,7 @@ def project_library_candidates() -> list[Path]:
 def is_project_library(directory: Path) -> bool:
     return (
         (directory / "buildhat" / "__init__.py").is_file()
+        and (directory / "basehat" / "__init__.py").is_file()
         and (directory / "basehat" / "LineFinder.py").is_file()
         and (directory / "basehat" / "IMUSensor.py").is_file()
     )
@@ -85,8 +86,8 @@ def configure_project_library(explicit_directory: Optional[Path] = None) -> Opti
         if not is_project_library(candidate):
             raise ValueError(
                 f"{candidate} is not the project lib directory; expected "
-                "buildhat/__init__.py, basehat/LineFinder.py, and "
-                "basehat/IMUSensor.py inside it"
+                "buildhat/__init__.py, basehat/__init__.py, "
+                "basehat/LineFinder.py, and basehat/IMUSensor.py inside it"
             )
         selected = candidate
     else:

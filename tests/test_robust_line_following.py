@@ -59,6 +59,7 @@ class LineFollowerControllerTests(unittest.TestCase):
     def test_course_library_is_found_from_repository_layout(self) -> None:
         self.assertIsNotNone(PROJECT_LIBRARY_DIRECTORY)
         self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "buildhat" / "__init__.py").is_file())
+        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "basehat" / "__init__.py").is_file())
         self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "basehat" / "LineFinder.py").is_file())
 
     def test_line_debouncer_rejects_a_short_change(self) -> None:
