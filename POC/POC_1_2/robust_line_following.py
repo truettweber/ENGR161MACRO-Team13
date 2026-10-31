@@ -155,11 +155,11 @@ class RobotConfig:
     line_debounce_s: float = 0.010
 
     # Regulated motor commands, on the Build HAT -100..100 scale
-    cruise_drive_command: float = 15.0
-    curve_drive_command: float = 11.0
+    cruise_drive_command: float = 30.0
+    curve_drive_command: float = 22.0
 
     # Manual arrow-key control
-    manual_drive_command: float = 12.5
+    manual_drive_command: float = 25.0
     manual_steering_fraction: float = 0.75
 
     # Straight-line bang-bang recovery
@@ -690,9 +690,14 @@ class ButtonPressClassifier:
         self,
         initial_pressed: bool,
         now: float,
-        double_press_window_s: float = 0.35,
+        double_press_window_s: float = 0.65,
+        stable_s: float = 0.04,
     ):
-        self._button = DebouncedButtonToggle(initial_pressed, now)
+        self._button = DebouncedButtonToggle(
+            initial_pressed,
+            now,
+            stable_s=stable_s,
+        )
         self.double_press_window_s = double_press_window_s
         self._first_press_at: Optional[float] = None
 

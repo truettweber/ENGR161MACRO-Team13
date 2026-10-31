@@ -29,12 +29,11 @@ capped at 70.
 
 ## Current drive speeds
 
-The very-low diagnostic commands stalled the drivetrain, so the prior moving
-speed level has been restored:
+The drive commands have been doubled from the preceding non-stalling settings:
 
-- Straight cruise: 15.0
-- Corrective turn: 11.0
-- Manual Up/Down: 12.5
+- Straight cruise: 30.0
+- Corrective turn: 22.0
+- Manual Up/Down: 25.0
 
 These are Build HAT command values on the -100 to 100 scale.
 
@@ -70,7 +69,7 @@ After motor initialization, the program waits with all motors stopped:
 
 - Press Alt to start line following immediately.
 - Press the Grove button once to start line following. It begins after a
-  0.35-second double-press window.
+  0.65-second double-press window.
 - Double-press the Grove button to enter straight-drive mode. It drives at the
   current cruise command with centered steering and ignores the line sensors.
 - Press Alt or the Grove button while either autonomous mode is active to stop

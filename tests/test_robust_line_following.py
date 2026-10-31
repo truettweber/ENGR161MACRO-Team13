@@ -64,9 +64,9 @@ class StraightLineControllerTests(unittest.TestCase):
         self.assertEqual(args.drive_motor_2_direction, -1)
         self.assertEqual(args.steering_direction, 1)
         config = RobotConfig()
-        self.assertEqual(config.cruise_drive_command, 15.0)
-        self.assertEqual(config.curve_drive_command, 11.0)
-        self.assertEqual(config.manual_drive_command, 12.5)
+        self.assertEqual(config.cruise_drive_command, 30.0)
+        self.assertEqual(config.curve_drive_command, 22.0)
+        self.assertEqual(config.manual_drive_command, 25.0)
         self.assertEqual(config.steering_max_command, 70.0)
 
     def test_course_library_is_found(self) -> None:
@@ -101,7 +101,7 @@ class StraightLineControllerTests(unittest.TestCase):
     def test_both_black_drives_straight(self) -> None:
         output = LineFollowerController(RobotConfig()).update(observation(0.0))
         self.assertEqual(output.state, ControllerState.TRACK)
-        self.assertEqual(output.drive_command, 15.0)
+        self.assertEqual(output.drive_command, 30.0)
         self.assertEqual(output.steering_wheel_deg, 0.0)
 
     def test_one_sensor_commands_immediate_full_turn(self) -> None:
@@ -113,8 +113,8 @@ class StraightLineControllerTests(unittest.TestCase):
         )
         self.assertAlmostEqual(left.steering_wheel_deg, -26.16)
         self.assertAlmostEqual(right.steering_wheel_deg, 26.16)
-        self.assertEqual(left.drive_command, 11.0)
-        self.assertEqual(right.drive_command, 11.0)
+        self.assertEqual(left.drive_command, 22.0)
+        self.assertEqual(right.drive_command, 22.0)
 
     def test_no_line_at_startup_stays_stopped(self) -> None:
         controller = LineFollowerController(RobotConfig())
@@ -138,7 +138,7 @@ class StraightLineControllerTests(unittest.TestCase):
         controller.update(observation(0.0, left=False, right=True))
         output = controller.update(observation(0.025))
         self.assertEqual(output.steering_wheel_deg, 0.0)
-        self.assertEqual(output.drive_command, 15.0)
+        self.assertEqual(output.drive_command, 30.0)
 
     def test_encoder_disagreement_faults(self) -> None:
         controller = LineFollowerController(RobotConfig())
@@ -155,7 +155,7 @@ class StraightLineControllerTests(unittest.TestCase):
         config = RobotConfig()
         output = manual_output(KeyboardSnapshot(up=True, left=True), config)
         self.assertEqual(output.state, ControllerState.MANUAL)
-        self.assertEqual(output.drive_command, 12.5)
+        self.assertEqual(output.drive_command, 25.0)
         self.assertLess(output.steering_wheel_deg, 0.0)
 
     def test_alt_toggles_and_arrows_override(self) -> None:
@@ -175,19 +175,21 @@ class StraightLineControllerTests(unittest.TestCase):
         self.assertFalse(button.update(True, 0.25))
 
     def test_button_single_and_double_press_actions(self) -> None:
-        button = ButtonPressClassifier(False, 0.0, double_press_window_s=0.35)
+        button = ButtonPressClassifier(False, 0.0)
         self.assertFalse(button.update(True, 0.01).press_edge)
-        self.assertTrue(button.update(True, 0.12).press_edge)
-        self.assertTrue(button.update(False, 0.13).press_edge is False)
-        self.assertFalse(button.update(False, 0.24).press_edge)
-        self.assertFalse(button.update(True, 0.25).press_edge)
-        double = button.update(True, 0.36)
+        self.assertTrue(button.update(True, 0.06).press_edge)
+        self.assertFalse(button.update(False, 0.07).press_edge)
+        self.assertFalse(button.update(False, 0.12).press_edge)
+        self.assertFalse(button.update(True, 0.50).press_edge)
+        double = button.update(True, 0.55)
         self.assertTrue(double.double_press)
 
-        single = ButtonPressClassifier(False, 1.0, double_press_window_s=0.35)
+        single = ButtonPressClassifier(False, 1.0)
         single.update(True, 1.01)
-        single.update(True, 1.12)
-        self.assertTrue(single.update(False, 1.48).single_press)
+        single.update(True, 1.06)
+        single.update(False, 1.07)
+        single.update(False, 1.12)
+        self.assertTrue(single.update(False, 1.72).single_press)
 
     def test_double_press_straight_drive_output(self) -> None:
         output = straight_drive_output(RobotConfig())
