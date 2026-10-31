@@ -19,6 +19,7 @@ from POC.POC_1_2.robust_line_following import (
     TkKeyboardInput,
     build_argument_parser,
     choose_operating_mode,
+    line_value_is_black,
     manual_output,
     wrap_degrees,
 )
@@ -57,6 +58,12 @@ def observation(
 
 
 class LineFollowerControllerTests(unittest.TestCase):
+    def test_grove_line_values_treat_zero_as_black(self) -> None:
+        self.assertTrue(line_value_is_black(0))
+        self.assertTrue(line_value_is_black(0.49))
+        self.assertFalse(line_value_is_black(0.5))
+        self.assertFalse(line_value_is_black(1))
+
     def test_relative_steering_position_handles_absolute_encoder_wrap(self) -> None:
         self.assertAlmostEqual(wrap_degrees(170.0 - (-170.0)), -20.0)
         self.assertAlmostEqual(wrap_degrees(-170.0 - 170.0), 20.0)

@@ -126,6 +126,12 @@ def wrap_degrees(angle: float) -> float:
     return (angle + 180.0) % 360.0 - 180.0
 
 
+def line_value_is_black(value: float) -> bool:
+    """Convert the Grove signal convention: 0 is black and 1 is white."""
+
+    return float(value) < 0.5
+
+
 def require_direction(value: str) -> int:
     parsed = int(value)
     if parsed not in (-1, 1):
@@ -1373,8 +1379,11 @@ class HardwareRobot:
         self._yaw_deg += yaw_rate * dt
         acceleration_norm = math.sqrt(sum(value * value for value in acceleration))
 
-        raw_left = bool(self.left_line.line_detected)
-        raw_right = bool(self.right_line.line_detected)
+        # Grove line finders output 0 over black and 1 over white. Controller
+        # booleans mean "black line detected", so explicitly invert the raw
+        # digital values instead of relying on GPIO active-state semantics.
+        raw_left = line_value_is_black(self.left_line.value)
+        raw_right = line_value_is_black(self.right_line.value)
         line_left, line_right = debouncer.update(raw_left, raw_right, now)
         self._last_steering_position = steering
 

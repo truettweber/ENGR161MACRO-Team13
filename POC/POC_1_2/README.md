@@ -16,8 +16,9 @@ Grove IMU. It deliberately does not use the magnetometer.
    propel the vehicle forward together without fighting one another.
 5. Turn the robot right by hand and select the yaw direction that produces a
    positive yaw rate.
-6. Place each line finder over black and white paper. The program uses the
-   supplied `line_detected` property, which should be true over black.
+6. Place each line finder over black and white paper. The raw Grove convention
+   is `0 = black` and `1 = white`; the controller explicitly converts `0` into
+   a detected black line.
 7. Connect the Grove start/stop button to D24. Verify that the Grove button or
    Alt switches from autonomous mode to the stopped waiting mode while the
    wheels are still lifted. Ctrl+C must stop all motors and exit.
