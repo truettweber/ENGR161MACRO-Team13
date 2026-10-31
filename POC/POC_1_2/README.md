@@ -80,7 +80,9 @@ The yaw sign must make a physical right turn produce positive yaw.
 After the two-second IMU calibration, the motors remain stopped. Press and
 release the Grove button to begin the run. Press the button again or press
 Ctrl+C to stop the run and exit. Ctrl+C is always a stop command; it is not
-used to start the process because it raises Python's keyboard interrupt.
+used to start the process because it raises Python's keyboard interrupt. The
+Grove button is configured as active-high: released reads 0 and pressed reads
+1, matching the supplied course hardware documentation.
 
 ## Import troubleshooting
 

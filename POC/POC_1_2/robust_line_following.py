@@ -748,7 +748,9 @@ class HardwareRobot:
         self.right_line = LineFinder(hardware.right_line_pin)
         self.start_stop_button = GpioButton(
             hardware.button_pin,
-            pull_up=True,
+            # The Grove module drives its digital output HIGH while pressed.
+            # pull_up=False makes gpiozero treat HIGH as the active state.
+            pull_up=False,
             bounce_time=0.05,
         )
         # Initialize only the accelerometer/gyroscope chip. The public
