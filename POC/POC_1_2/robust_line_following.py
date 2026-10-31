@@ -194,6 +194,7 @@ class RobotConfig:
 
     # Gap and search bounds from the project track specification
     maximum_predicted_gap_in: float = 3.5
+    gap_recovery_curvature_fraction: float = 1.0
     search_sweep_s: float = 1.0
     maximum_search_s: float = 8.0
     maximum_search_distance_in: float = 12.0
@@ -830,6 +831,8 @@ class LineFollowerController:
         self.previous_line_sign = 0
         self.one_side_persistence_s = 0.0
         self.line_confidence = 0.0
+        self.previous_line_pair = (False, False)
+        self.gap_recovery_sign = 0
 
         self.last_odometer_in = 0.0
 
@@ -854,7 +857,26 @@ class LineFollowerController:
         return max(0.0, obs.now - self.state_started_at)
 
     def _enter_gap(self, obs: Observation, reason: str) -> None:
+        if self.gap_recovery_sign < 0:
+            reason += "; turning left toward the last sensor on the line"
+        elif self.gap_recovery_sign > 0:
+            reason += "; turning right toward the last sensor on the line"
+        else:
+            reason += "; no departure direction detected, commanding straight"
         self._transition(ControllerState.GAP_PREDICT, obs, reason)
+
+    def _record_line_departure(self, obs: Observation) -> None:
+        current = (obs.line_left, obs.line_right)
+        if current == (False, False) and current != self.previous_line_pair:
+            if self.previous_line_pair == (True, False):
+                self.gap_recovery_sign = -1
+                self.last_line_sign = -1
+            elif self.previous_line_pair == (False, True):
+                self.gap_recovery_sign = 1
+                self.last_line_sign = 1
+            else:
+                self.gap_recovery_sign = 0
+        self.previous_line_pair = current
 
     def _line_sign(self, obs: Observation) -> int:
         # Positive steering is a right turn. A left-only detection means the
@@ -961,9 +983,14 @@ class LineFollowerController:
 
     def _predict_gap(self, obs: Observation) -> tuple[float, float]:
         traveled = obs.odometer_in - self.state_started_odometer
-        # Both sensors are white. Do not preserve or predict a turn: command
-        # straight immediately while crossing the bounded possible line gap.
-        self.curvature_command = 0.0
+        # The last sensor to change from black to white identifies the side
+        # toward which the line departed. Apply an immediate, fixed correction
+        # toward that side while crossing the bounded possible line gap.
+        self.curvature_command = (
+            self.gap_recovery_sign
+            * self.config.maximum_tracking_curvature_per_in
+            * self.config.gap_recovery_curvature_fraction
+        )
         self.line_confidence = clamp(
             1.0 - traveled / self.config.maximum_predicted_gap_in, 0.0, 1.0
         )
@@ -996,6 +1023,7 @@ class LineFollowerController:
 
         self._update_diagnostics(obs)
         any_line = obs.line_left or obs.line_right
+        self._record_line_departure(obs)
 
         if self.disagreement_s >= self.config.motor_disagreement_trigger_s:
             self._transition(

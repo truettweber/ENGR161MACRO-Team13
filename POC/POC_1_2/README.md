@@ -37,10 +37,12 @@ stabilized steering settings below.
 Line tracking is tuned to reduce oscillation: curvature ramps at `0.075`,
 command slew is `0.120`, and centered steering decays at `0.250`. Ordinary
 tracking is capped at 60% of the full curvature range. When both sensors become
-white, all gap steering correction is removed and the controller commands
-straight immediately while crossing the bounded possible gap. IMU yaw-rate and
-heading steering gains are currently zero until the IMU signal and yaw sign are
-verified; IMU values are still logged.
+white, the controller turns toward whichever sensor was the last one still on
+black. This applies the normal maximum tracking correction immediately. If both
+sensors leave black simultaneously, it commands straight because no departure
+direction was observed. IMU yaw-rate and heading steering gains are currently
+zero until the IMU signal and yaw sign are verified; IMU values are still
+logged.
 
 ## Measure encoder distance
 
@@ -159,7 +161,8 @@ commands to all three motors even if another motor stop command fails.
 - `acquire`: move slowly and find the starting line.
 - `track`: follow visible line readings with a capped correction and fast
   recentering. IMU yaw steering correction is currently disabled.
-- `gap_predict`: command straight while crossing a gap of up to 3.5 inches.
+- `gap_predict`: turn toward the sensor that last left the line while crossing
+  a gap of up to 3.5 inches.
 - `search`: perform a slow, bounded widening sweep toward the last line side.
 - `obstacle`: reduce speed and retain the entry curvature while pitch, roll,
   acceleration, and encoder progress indicate rough terrain.
