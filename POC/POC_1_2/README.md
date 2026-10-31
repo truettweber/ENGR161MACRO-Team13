@@ -8,7 +8,8 @@ Grove IMU. It deliberately does not use the magnetometer.
 ## Safety before the first run
 
 1. Lift the driven wheels clear of the table.
-2. Confirm that steering motor position 0 points both wheels straight ahead.
+2. Point both front wheels physically straight ahead. The program records the
+   current absolute steering encoder position as its relative 0-degree center.
 3. Confirm that neither steering hard stop can be reached inside the program's
    normal +/-80 motor-degree limit.
 4. Determine each motor direction at a low command. Both drive motors must

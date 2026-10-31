@@ -10,6 +10,7 @@ from POC.POC_1_2.robust_line_following import (
     PROJECT_LIBRARY_DIRECTORY,
     RobotConfig,
     build_argument_parser,
+    wrap_degrees,
 )
 
 
@@ -46,6 +47,10 @@ def observation(
 
 
 class LineFollowerControllerTests(unittest.TestCase):
+    def test_relative_steering_position_handles_absolute_encoder_wrap(self) -> None:
+        self.assertAlmostEqual(wrap_degrees(170.0 - (-170.0)), -20.0)
+        self.assertAlmostEqual(wrap_degrees(-170.0 - 170.0), 20.0)
+
     def test_pi_script_defaults_match_supplied_robot_configuration(self) -> None:
         args = build_argument_parser().parse_args([])
         self.assertEqual(args.drive_motor_1_port, "C")
