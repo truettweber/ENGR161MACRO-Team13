@@ -53,7 +53,7 @@ def observation(
 
 
 class StraightLineControllerTests(unittest.TestCase):
-    def test_defaults_match_robot_and_slow_test_speed(self) -> None:
+    def test_defaults_match_robot_and_nonstalling_test_speed(self) -> None:
         args = build_argument_parser().parse_args([])
         self.assertEqual(args.drive_motor_1_port, "C")
         self.assertEqual(args.drive_motor_2_port, "D")
@@ -64,9 +64,9 @@ class StraightLineControllerTests(unittest.TestCase):
         self.assertEqual(args.drive_motor_2_direction, -1)
         self.assertEqual(args.steering_direction, 1)
         config = RobotConfig()
-        self.assertEqual(config.cruise_drive_command, 6.0)
-        self.assertEqual(config.curve_drive_command, 4.4)
-        self.assertEqual(config.manual_drive_command, 5.0)
+        self.assertEqual(config.cruise_drive_command, 15.0)
+        self.assertEqual(config.curve_drive_command, 11.0)
+        self.assertEqual(config.manual_drive_command, 12.5)
         self.assertEqual(config.steering_max_command, 70.0)
 
     def test_course_library_is_found(self) -> None:
@@ -101,7 +101,7 @@ class StraightLineControllerTests(unittest.TestCase):
     def test_both_black_drives_straight(self) -> None:
         output = LineFollowerController(RobotConfig()).update(observation(0.0))
         self.assertEqual(output.state, ControllerState.TRACK)
-        self.assertEqual(output.drive_command, 6.0)
+        self.assertEqual(output.drive_command, 15.0)
         self.assertEqual(output.steering_wheel_deg, 0.0)
 
     def test_one_sensor_commands_immediate_full_turn(self) -> None:
@@ -113,8 +113,8 @@ class StraightLineControllerTests(unittest.TestCase):
         )
         self.assertAlmostEqual(left.steering_wheel_deg, -26.16)
         self.assertAlmostEqual(right.steering_wheel_deg, 26.16)
-        self.assertEqual(left.drive_command, 4.4)
-        self.assertEqual(right.drive_command, 4.4)
+        self.assertEqual(left.drive_command, 11.0)
+        self.assertEqual(right.drive_command, 11.0)
 
     def test_no_line_at_startup_stays_stopped(self) -> None:
         controller = LineFollowerController(RobotConfig())
@@ -138,7 +138,7 @@ class StraightLineControllerTests(unittest.TestCase):
         controller.update(observation(0.0, left=False, right=True))
         output = controller.update(observation(0.025))
         self.assertEqual(output.steering_wheel_deg, 0.0)
-        self.assertEqual(output.drive_command, 6.0)
+        self.assertEqual(output.drive_command, 15.0)
 
     def test_encoder_disagreement_faults(self) -> None:
         controller = LineFollowerController(RobotConfig())
@@ -155,7 +155,7 @@ class StraightLineControllerTests(unittest.TestCase):
         config = RobotConfig()
         output = manual_output(KeyboardSnapshot(up=True, left=True), config)
         self.assertEqual(output.state, ControllerState.MANUAL)
-        self.assertEqual(output.drive_command, 5.0)
+        self.assertEqual(output.drive_command, 12.5)
         self.assertLess(output.steering_wheel_deg, 0.0)
 
     def test_alt_toggles_and_arrows_override(self) -> None:

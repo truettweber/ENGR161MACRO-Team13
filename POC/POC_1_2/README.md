@@ -27,16 +27,16 @@ Full correction is +/-90 steering-motor degrees, corresponding to +/-26.16
 wheel degrees. The steering position gain is 1.75 and its Build HAT command is
 capped at 70.
 
-## Current slow test speeds
+## Current drive speeds
 
-Drive commands are 60% below the preceding version:
+The very-low diagnostic commands stalled the drivetrain, so the prior moving
+speed level has been restored:
 
-- Straight cruise: 6.0
-- Corrective turn: 4.4
-- Manual Up/Down: 5.0
+- Straight cruise: 15.0
+- Corrective turn: 11.0
+- Manual Up/Down: 12.5
 
-These are Build HAT command values on the -100 to 100 scale. Commands this low
-may not overcome drivetrain friction; increase them if the motors stall.
+These are Build HAT command values on the -100 to 100 scale.
 
 ## Before running
 

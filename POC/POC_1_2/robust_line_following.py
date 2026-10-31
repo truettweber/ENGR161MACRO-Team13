@@ -155,11 +155,11 @@ class RobotConfig:
     line_debounce_s: float = 0.010
 
     # Regulated motor commands, on the Build HAT -100..100 scale
-    cruise_drive_command: float = 6.0
-    curve_drive_command: float = 4.4
+    cruise_drive_command: float = 15.0
+    curve_drive_command: float = 11.0
 
     # Manual arrow-key control
-    manual_drive_command: float = 5.0
+    manual_drive_command: float = 12.5
     manual_steering_fraction: float = 0.75
 
     # Straight-line bang-bang recovery
