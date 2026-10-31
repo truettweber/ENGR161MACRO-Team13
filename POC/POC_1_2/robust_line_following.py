@@ -10,8 +10,7 @@ Hardware assumptions
 * Two SPIKE Large Angular Motors are mechanically coupled to one drivetrain.
 * One SPIKE Small Angular Motor drives a rack-and-pinion steering system.
 * The steering position at startup is treated as straight. +/-90 motor degrees
-  from that center maps to +/-26.16 wheel degrees, but normal operation is
-  limited to +/-80 motor degrees.
+  from that center maps to +/-26.16 wheel degrees and is the commanded limit.
 * Two Grove line finders are mounted 0.375 inch either side of the centerline
   and 1.75 inches ahead of the front axle.
 * A Grove button or keyboard Alt key toggles autonomous operation after
@@ -152,7 +151,7 @@ class RobotConfig:
     wheelbase_in: float = 5.5
     sensor_ahead_of_front_axle_in: float = 1.75
     sensor_half_spacing_in: float = 0.375
-    steering_motor_limit_deg: float = 80.0
+    steering_motor_limit_deg: float = 90.0
     wheel_deg_at_90_motor_deg: float = 26.16
 
     # Loop and sensor filtering
@@ -177,12 +176,12 @@ class RobotConfig:
     steering_min_command: float = 8.0
     steering_max_command: float = 45.0
     steering_deadband_motor_deg: float = 1.0
-    steering_emergency_limit_deg: float = 88.0
+    steering_emergency_limit_deg: float = 90.0
 
     # Line and yaw control
-    curvature_ramp_per_s: float = 0.050
+    curvature_ramp_per_s: float = 0.150
     centered_curvature_decay_per_s: float = 0.080
-    curvature_slew_per_s: float = 0.100
+    curvature_slew_per_s: float = 0.200
     yaw_rate_curvature_gain: float = 0.0015
     heading_curvature_gain: float = 0.0025
 

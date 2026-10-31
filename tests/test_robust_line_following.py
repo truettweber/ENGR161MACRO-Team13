@@ -252,6 +252,24 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(right.state, ControllerState.TRACK)
         self.assertGreater(right.steering_wheel_deg, 0.0)
 
+    def test_sustained_line_error_ramps_to_aggressive_steering(self) -> None:
+        config = RobotConfig()
+        self.assertEqual(config.steering_motor_limit_deg, 90.0)
+        self.assertAlmostEqual(config.maximum_wheel_angle_deg, 26.16)
+
+        controller = LineFollowerController(config)
+        output = controller.update(observation(0.0, left=False, right=True))
+        for index in range(1, 21):
+            output = controller.update(
+                observation(index * 0.025, left=False, right=True)
+            )
+
+        self.assertGreater(output.steering_wheel_deg, 20.0)
+        self.assertLessEqual(
+            output.steering_wheel_deg,
+            config.maximum_wheel_angle_deg,
+        )
+
     def test_short_gap_preserves_curve_then_reacquires(self) -> None:
         controller = LineFollowerController(RobotConfig())
         controller.update(observation(0.0, left=False, right=True))

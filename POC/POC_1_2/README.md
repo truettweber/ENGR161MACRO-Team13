@@ -10,8 +10,8 @@ Grove IMU. It deliberately does not use the magnetometer.
 1. Lift the driven wheels clear of the table.
 2. Point both front wheels physically straight ahead. The program records the
    current absolute steering encoder position as its relative 0-degree center.
-3. Confirm that neither steering hard stop can be reached inside the program's
-   normal +/-80 motor-degree limit.
+3. Confirm that the physical steering hard stops safely accommodate the
+   program's full +/-90 motor-degree commanded range.
 4. Determine each motor direction at a low command. Both drive motors must
    propel the vehicle forward together without fighting one another.
 5. Turn the robot right by hand and select the yaw direction that produces a
