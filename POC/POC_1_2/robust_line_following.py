@@ -194,9 +194,6 @@ class RobotConfig:
 
     # Gap and search bounds from the project track specification
     maximum_predicted_gap_in: float = 3.5
-    gap_entry_curvature_fraction: float = 0.25
-    gap_curvature_hold_s: float = 0.15
-    gap_curvature_decay_per_s: float = 0.100
     search_sweep_s: float = 1.0
     maximum_search_s: float = 8.0
     maximum_search_distance_in: float = 12.0
@@ -834,8 +831,6 @@ class LineFollowerController:
         self.one_side_persistence_s = 0.0
         self.line_confidence = 0.0
 
-        self.gap_curvature = 0.0
-        self.gap_heading_reference_deg = 0.0
         self.last_odometer_in = 0.0
 
         self.obstacle_curvature = 0.0
@@ -859,12 +854,6 @@ class LineFollowerController:
         return max(0.0, obs.now - self.state_started_at)
 
     def _enter_gap(self, obs: Observation, reason: str) -> None:
-        self.gap_curvature = clamp(
-            self.config.gap_entry_curvature_fraction * self.curvature_command,
-            -self.config.initial_line_curvature_per_in,
-            self.config.initial_line_curvature_per_in,
-        )
-        self.gap_heading_reference_deg = obs.yaw_deg
         self._transition(ControllerState.GAP_PREDICT, obs, reason)
 
     def _line_sign(self, obs: Observation) -> int:
@@ -972,26 +961,9 @@ class LineFollowerController:
 
     def _predict_gap(self, obs: Observation) -> tuple[float, float]:
         traveled = obs.odometer_in - self.state_started_odometer
-        if self._state_elapsed(obs) > self.config.gap_curvature_hold_s:
-            self.gap_curvature = move_toward(
-                self.gap_curvature,
-                0.0,
-                self.config.gap_curvature_decay_per_s * obs.dt,
-            )
-        delta_distance = max(0.0, obs.odometer_in - self.last_odometer_in)
-        self.gap_heading_reference_deg += math.degrees(self.gap_curvature * delta_distance)
-        heading_error = wrap_degrees(self.gap_heading_reference_deg - obs.yaw_deg)
-        curvature = self.gap_curvature + self.config.heading_curvature_gain * heading_error
-        curvature = clamp(
-            curvature,
-            -self.config.initial_line_curvature_per_in,
-            self.config.initial_line_curvature_per_in,
-        )
-        self.curvature_command = move_toward(
-            self.curvature_command,
-            curvature,
-            self.config.centered_curvature_decay_per_s * obs.dt,
-        )
+        # Both sensors are white. Do not preserve or predict a turn: command
+        # straight immediately while crossing the bounded possible line gap.
+        self.curvature_command = 0.0
         self.line_confidence = clamp(
             1.0 - traveled / self.config.maximum_predicted_gap_in, 0.0, 1.0
         )

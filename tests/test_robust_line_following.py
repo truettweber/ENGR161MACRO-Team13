@@ -308,7 +308,7 @@ class LineFollowerControllerTests(unittest.TestCase):
         )
         self.assertGreater(output.steering_wheel_deg, 0.0)
 
-    def test_short_gap_preserves_curve_then_reacquires(self) -> None:
+    def test_short_gap_commands_straight_then_reacquires(self) -> None:
         controller = LineFollowerController(RobotConfig())
         controller.update(observation(0.0, left=False, right=True))
         for index in range(1, 12):
@@ -321,16 +321,16 @@ class LineFollowerControllerTests(unittest.TestCase):
             observation(0.4, left=False, right=False, odometer=1.3)
         )
         self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
-        self.assertGreater(gap.curvature_per_in, 0.0)
+        self.assertEqual(gap.curvature_per_in, 0.0)
+        self.assertEqual(gap.steering_wheel_deg, 0.0)
 
         reacquired = controller.update(
             observation(0.5, left=True, right=True, odometer=1.8)
         )
         self.assertEqual(reacquired.state, ControllerState.TRACK)
 
-    def test_gap_correction_is_small_and_decays_toward_straight(self) -> None:
-        config = RobotConfig()
-        controller = LineFollowerController(config)
+    def test_gap_removes_correction_immediately(self) -> None:
+        controller = LineFollowerController(RobotConfig())
         controller.update(observation(0.0, left=False, right=True))
         for index in range(1, 21):
             controller.update(
@@ -346,26 +346,8 @@ class LineFollowerControllerTests(unittest.TestCase):
             observation(0.525, left=False, right=False, odometer=0.63)
         )
         self.assertEqual(first_gap.state, ControllerState.GAP_PREDICT)
-        self.assertLessEqual(
-            abs(controller.gap_curvature),
-            config.initial_line_curvature_per_in,
-        )
-
-        later_gap = first_gap
-        for index in range(1, 21):
-            later_gap = controller.update(
-                observation(
-                    0.525 + index * 0.025,
-                    left=False,
-                    right=False,
-                    odometer=0.63 + index * 0.03,
-                )
-            )
-        self.assertLess(
-            abs(later_gap.curvature_per_in),
-            abs(first_gap.curvature_per_in),
-        )
-        self.assertAlmostEqual(controller.gap_curvature, 0.0)
+        self.assertEqual(first_gap.curvature_per_in, 0.0)
+        self.assertEqual(first_gap.steering_wheel_deg, 0.0)
 
     def test_gap_longer_than_specification_enters_search(self) -> None:
         controller = LineFollowerController(RobotConfig())
