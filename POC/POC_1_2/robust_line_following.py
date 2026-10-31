@@ -527,6 +527,175 @@ class LinuxKeyboardInput:
         self._pressed_ctrl.clear()
 
 
+class TkKeyboardInput:
+    """Desktop keyboard-control window used when Linux event devices are absent."""
+
+    ARROW_KEYSYMS = {
+        "Up": "up",
+        "Down": "down",
+        "Left": "left",
+        "Right": "right",
+    }
+    ALT_KEYSYMS = {"Alt_L", "Alt_R"}
+    CTRL_KEYSYMS = {"Control_L", "Control_R"}
+
+    def __init__(self):
+        import tkinter as tk
+
+        self._tk = tk
+        self._root = tk.Tk()
+        self._root.title("MACRO Robot Keyboard Control")
+        self._root.geometry("560x170")
+        self._root.attributes("-topmost", True)
+        self._pressed_arrows: set[str] = set()
+        self._pressed_alt: set[str] = set()
+        self._pressed_ctrl: set[str] = set()
+        self._release_jobs: dict[str, str] = {}
+        self._alt_pressed = False
+        self._arrow_activity = False
+        self._emergency_stop = False
+        self._closed = False
+
+        tk.Label(
+            self._root,
+            text="MACRO Robot Keyboard Control",
+            font=("TkDefaultFont", 16, "bold"),
+        ).pack(pady=(14, 4))
+        tk.Label(
+            self._root,
+            text=(
+                "Keep this window focused.  Alt: toggle autonomous\n"
+                "Arrow keys: manual drive/steering    Ctrl+C: stop and exit"
+            ),
+            justify="center",
+        ).pack(pady=4)
+        self._status = tk.Label(
+            self._root,
+            text="Keyboard ready",
+            foreground="dark green",
+        )
+        self._status.pack(pady=4)
+
+        self._root.bind("<KeyPress>", self._on_press)
+        self._root.bind("<KeyRelease>", self._on_release)
+        self._root.bind("<FocusOut>", self._on_focus_out)
+        self._root.protocol("WM_DELETE_WINDOW", self._request_close)
+        self._root.update_idletasks()
+        self._root.deiconify()
+        self._root.lift()
+        self._root.focus_force()
+
+    def _cancel_delayed_release(self, keysym: str) -> None:
+        job = self._release_jobs.pop(keysym, None)
+        if job is not None:
+            try:
+                self._root.after_cancel(job)
+            except self._tk.TclError:
+                pass
+
+    def _on_press(self, event: object) -> str:
+        keysym = str(getattr(event, "keysym", ""))
+        self._cancel_delayed_release(keysym)
+        arrow = self.ARROW_KEYSYMS.get(keysym)
+        if arrow is not None:
+            if arrow not in self._pressed_arrows:
+                self._arrow_activity = True
+            self._pressed_arrows.add(arrow)
+            self._status.configure(
+                text=f"Manual key held: {keysym}", foreground="dark green"
+            )
+        elif keysym in self.ALT_KEYSYMS:
+            if keysym not in self._pressed_alt:
+                self._alt_pressed = True
+            self._pressed_alt.add(keysym)
+            self._status.configure(
+                text="Autonomous toggle requested", foreground="dark green"
+            )
+        elif keysym in self.CTRL_KEYSYMS:
+            self._pressed_ctrl.add(keysym)
+        elif keysym.lower() == "c" and self._pressed_ctrl:
+            self._emergency_stop = True
+            self._status.configure(text="Emergency stop requested", foreground="red")
+        return "break"
+
+    def _on_release(self, event: object) -> str:
+        keysym = str(getattr(event, "keysym", ""))
+        self._cancel_delayed_release(keysym)
+        # X11 may synthesize release/press pairs during key repeat. Delay the
+        # release briefly so a following repeat press can cancel it.
+        self._release_jobs[keysym] = self._root.after(
+            30,
+            lambda key=keysym: self._finish_release(key),
+        )
+        return "break"
+
+    def _finish_release(self, keysym: str) -> None:
+        self._release_jobs.pop(keysym, None)
+        arrow = self.ARROW_KEYSYMS.get(keysym)
+        if arrow is not None:
+            self._pressed_arrows.discard(arrow)
+            if not self._pressed_arrows:
+                self._status.configure(text="Keyboard ready", foreground="dark green")
+        elif keysym in self.ALT_KEYSYMS:
+            self._pressed_alt.discard(keysym)
+        elif keysym in self.CTRL_KEYSYMS:
+            self._pressed_ctrl.discard(keysym)
+
+    def _on_focus_out(self, _event: object) -> None:
+        self._clear_held_keys()
+        self._status.configure(
+            text="Click this window before using robot controls",
+            foreground="dark orange",
+        )
+
+    def _clear_held_keys(self) -> None:
+        for job in self._release_jobs.values():
+            try:
+                self._root.after_cancel(job)
+            except self._tk.TclError:
+                pass
+        self._release_jobs.clear()
+        self._pressed_arrows.clear()
+        self._pressed_alt.clear()
+        self._pressed_ctrl.clear()
+
+    def _request_close(self) -> None:
+        self._clear_held_keys()
+        self._emergency_stop = True
+
+    def poll(self) -> KeyboardSnapshot:
+        try:
+            self._root.update_idletasks()
+            self._root.update()
+        except self._tk.TclError:
+            self._closed = True
+            self._emergency_stop = True
+
+        snapshot = KeyboardSnapshot(
+            alt_pressed=self._alt_pressed,
+            arrow_activity=self._arrow_activity,
+            emergency_stop=self._emergency_stop,
+            up="up" in self._pressed_arrows,
+            down="down" in self._pressed_arrows,
+            left="left" in self._pressed_arrows,
+            right="right" in self._pressed_arrows,
+        )
+        self._alt_pressed = False
+        self._arrow_activity = False
+        self._emergency_stop = False
+        return snapshot
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._clear_held_keys()
+        try:
+            self._root.destroy()
+        except self._tk.TclError:
+            pass
+
+
 class DebouncedButtonToggle:
     """Emit one toggle for each stable robot-button press."""
 
@@ -1463,6 +1632,36 @@ def describe_keyboard(keyboard: LinuxKeyboardInput) -> None:
     )
 
 
+def create_keyboard_input(
+    device_paths: Optional[Sequence[Path]],
+) -> Optional[LinuxKeyboardInput | TkKeyboardInput]:
+    linux_keyboard = LinuxKeyboardInput(device_paths)
+    if linux_keyboard.exclusive:
+        describe_keyboard(linux_keyboard)
+        return linux_keyboard
+
+    try:
+        desktop_keyboard = TkKeyboardInput()
+    except Exception as error:
+        describe_keyboard(linux_keyboard)
+        print(
+            "WARNING: The desktop keyboard-control window could not be opened: "
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        if linux_keyboard.available:
+            return linux_keyboard
+        linux_keyboard.close()
+        return None
+
+    linux_keyboard.close()
+    print(
+        "Keyboard control window opened. Keep that window focused while using "
+        "Alt or the arrow keys."
+    )
+    return desktop_keyboard
+
+
 def run(args: argparse.Namespace) -> int:
     global PROJECT_LIBRARY_DIRECTORY
     if args.library_directory is not None:
@@ -1491,7 +1690,7 @@ def run(args: argparse.Namespace) -> int:
     controller = LineFollowerController(config)
     debouncer = LineDebouncer(config.line_debounce_s)
     robot: Optional[HardwareRobot] = None
-    keyboard: Optional[LinuxKeyboardInput] = None
+    keyboard: Optional[LinuxKeyboardInput | TkKeyboardInput] = None
     run_logger: Optional[CsvRunLogger] = None
     previous_state: Optional[ControllerState] = None
     loop_period = 1.0 / config.loop_hz
@@ -1502,18 +1701,23 @@ def run(args: argparse.Namespace) -> int:
         robot.stop_all()
 
         if not args.no_keyboard_control:
-            keyboard = LinuxKeyboardInput(args.keyboard_device)
-            describe_keyboard(keyboard)
+            keyboard = create_keyboard_input(args.keyboard_device)
 
         now = time.monotonic()
         button_toggle = DebouncedButtonToggle(robot.button_pressed, now)
         operating_mode = OperatingMode.WAITING
         run_logger = CsvRunLogger(log_path)
-        print(
-            "Waiting with all motors stopped. Press Alt or the Grove button "
-            "to start autonomous mode; press an arrow key for manual mode. "
-            f"Ctrl+C exits. Log: {log_path}"
-        )
+        if keyboard is not None:
+            print(
+                "Waiting with all motors stopped. Press Alt or the Grove button "
+                "to start autonomous mode; press an arrow key for manual mode. "
+                f"Ctrl+C exits. Log: {log_path}"
+            )
+        else:
+            print(
+                "Waiting with all motors stopped. Press the Grove button to "
+                f"start autonomous mode. Ctrl+C exits. Log: {log_path}"
+            )
 
         while True:
             loop_started = time.monotonic()

@@ -97,12 +97,16 @@ From manual mode, press Alt or the Grove button to start autonomous mode again.
 Ctrl+C remains the emergency stop: it stops all motors and exits. The Grove
 button is active-high: released reads 0 and pressed reads 1.
 
-The program reads Linux `/dev/input/event*` devices because a terminal cannot
-report a standalone Alt press. It exclusively captures the physical keyboard
-while running, so arrow keys control the robot instead of moving the cursor in
-Thonny. The program recognizes Ctrl+C directly from the captured keyboard and
-releases the device automatically when it exits. If it prints a keyboard
-permission or exclusive-capture warning, run:
+The program first tries to read Linux `/dev/input/event*` devices because a
+terminal cannot report a standalone Alt press. When those devices are
+available, it exclusively captures the physical keyboard while running. If the
+Pi does not expose a readable keyboard device, the program opens a small
+**MACRO Robot Keyboard Control** window instead. Keep that window focused while
+driving; losing focus immediately clears held arrows and stops manual motion.
+This also prevents the arrows from moving the cursor in Thonny. Ctrl+C remains
+the emergency exit in either input mode, and the device/window is released
+automatically when the program exits. If both the control window and direct
+keyboard capture fail, run:
 
 ```text
 sudo usermod -aG input team_13

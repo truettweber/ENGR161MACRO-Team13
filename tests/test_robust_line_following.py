@@ -3,6 +3,7 @@
 import os
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from POC.POC_1_2.robust_line_following import (
     ControllerState,
@@ -15,6 +16,7 @@ from POC.POC_1_2.robust_line_following import (
     OperatingMode,
     PROJECT_LIBRARY_DIRECTORY,
     RobotConfig,
+    TkKeyboardInput,
     build_argument_parser,
     choose_operating_mode,
     manual_output,
@@ -156,6 +158,72 @@ class LineFollowerControllerTests(unittest.TestCase):
         finally:
             keyboard.close()
             os.close(write_fd)
+
+    def test_desktop_control_window_tracks_keys_and_focus_loss(self) -> None:
+        class FakeRoot:
+            def __init__(self) -> None:
+                self.jobs = {}
+                self.next_job = 0
+
+            def after(self, _delay, callback):
+                self.next_job += 1
+                job = str(self.next_job)
+                self.jobs[job] = callback
+                return job
+
+            def after_cancel(self, job):
+                self.jobs.pop(job, None)
+
+            def update_idletasks(self):
+                pass
+
+            def update(self):
+                pass
+
+            def run_jobs(self):
+                jobs = list(self.jobs.values())
+                self.jobs.clear()
+                for callback in jobs:
+                    callback()
+
+        class FakeStatus:
+            def configure(self, **_kwargs):
+                pass
+
+        class FakeTk:
+            TclError = RuntimeError
+
+        keyboard = TkKeyboardInput.__new__(TkKeyboardInput)
+        keyboard._tk = FakeTk
+        keyboard._root = FakeRoot()
+        keyboard._status = FakeStatus()
+        keyboard._pressed_arrows = set()
+        keyboard._pressed_alt = set()
+        keyboard._pressed_ctrl = set()
+        keyboard._release_jobs = {}
+        keyboard._alt_pressed = False
+        keyboard._arrow_activity = False
+        keyboard._emergency_stop = False
+        keyboard._closed = False
+
+        keyboard._on_press(SimpleNamespace(keysym="Up"))
+        pressed = keyboard.poll()
+        self.assertTrue(pressed.arrow_activity)
+        self.assertTrue(pressed.up)
+
+        keyboard._on_release(SimpleNamespace(keysym="Up"))
+        keyboard._root.run_jobs()
+        self.assertFalse(keyboard.poll().up)
+
+        keyboard._on_press(SimpleNamespace(keysym="Alt_L"))
+        self.assertTrue(keyboard.poll().alt_pressed)
+        keyboard._on_press(SimpleNamespace(keysym="Control_L"))
+        keyboard._on_press(SimpleNamespace(keysym="c"))
+        self.assertTrue(keyboard.poll().emergency_stop)
+
+        keyboard._on_press(SimpleNamespace(keysym="Right"))
+        keyboard._on_focus_out(SimpleNamespace())
+        self.assertFalse(keyboard.poll().right)
 
     def test_course_library_is_found_from_repository_layout(self) -> None:
         self.assertIsNotNone(PROJECT_LIBRARY_DIRECTORY)
