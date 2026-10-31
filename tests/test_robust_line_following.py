@@ -123,15 +123,17 @@ class StraightLineControllerTests(unittest.TestCase):
         self.assertEqual(output.drive_command, 0.0)
         self.assertEqual(output.steering_wheel_deg, 0.0)
 
-    def test_line_loss_continues_last_turn_then_stops(self) -> None:
+    def test_line_loss_continues_last_turn_without_timeout(self) -> None:
         controller = LineFollowerController(RobotConfig())
         controller.update(observation(0.0, left=True, right=False))
         recovering = controller.update(observation(0.1, left=False, right=False))
         self.assertAlmostEqual(recovering.steering_wheel_deg, -26.16)
-        stopped = controller.update(observation(1.11, left=False, right=False))
-        self.assertEqual(stopped.state, ControllerState.FAULT)
-        self.assertEqual(stopped.drive_command, 0.0)
-        self.assertEqual(stopped.steering_wheel_deg, 0.0)
+        still_recovering = controller.update(
+            observation(10.0, left=False, right=False)
+        )
+        self.assertEqual(still_recovering.state, ControllerState.TRACK)
+        self.assertEqual(still_recovering.drive_command, 22.0)
+        self.assertAlmostEqual(still_recovering.steering_wheel_deg, -26.16)
 
     def test_reacquiring_both_sensors_immediately_straightens(self) -> None:
         controller = LineFollowerController(RobotConfig())

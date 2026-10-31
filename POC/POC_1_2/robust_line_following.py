@@ -162,9 +162,6 @@ class RobotConfig:
     manual_drive_command: float = 25.0
     manual_steering_fraction: float = 0.75
 
-    # Straight-line bang-bang recovery
-    line_loss_stop_s: float = 1.0
-
     # Steering motor position loop
     steering_position_kp: float = 1.75
     steering_min_command: float = 8.0
@@ -818,7 +815,6 @@ class LineFollowerController:
         self.state = ControllerState.ACQUIRE
         self.reason = "waiting for a line at startup"
         self.last_line_sign = 0
-        self.line_lost_since: Optional[float] = None
         self.disagreement_s = 0.0
         self.last_drive_command = 0.0
 
@@ -874,13 +870,11 @@ class LineFollowerController:
         if obs.line_left and obs.line_right:
             self.state = ControllerState.TRACK
             self.reason = "both sensors see black; driving straight"
-            self.line_lost_since = None
             return self._output(self.config.cruise_drive_command, 0.0, 1.0)
 
         if line_sign != 0:
             self.state = ControllerState.TRACK
             self.last_line_sign = line_sign
-            self.line_lost_since = None
             direction = "left" if line_sign < 0 else "right"
             self.reason = (
                 f"only the {direction} sensor sees black; "
@@ -895,15 +889,6 @@ class LineFollowerController:
         if self.state == ControllerState.ACQUIRE or self.last_line_sign == 0:
             self.state = ControllerState.ACQUIRE
             self.reason = "waiting for a line at startup"
-            self.line_lost_since = None
-            return self._output(0.0, 0.0, 0.0)
-
-        if self.line_lost_since is None:
-            self.line_lost_since = obs.now
-        lost_for = max(0.0, obs.now - self.line_lost_since)
-        if lost_for >= self.config.line_loss_stop_s:
-            self.state = ControllerState.FAULT
-            self.reason = "line remained lost; stopping instead of steering indefinitely"
             return self._output(0.0, 0.0, 0.0)
 
         self.state = ControllerState.TRACK
@@ -912,11 +897,10 @@ class LineFollowerController:
             f"both sensors are white; continuing full {direction} correction "
             "toward the last observed line side"
         )
-        confidence = clamp(1.0 - lost_for / self.config.line_loss_stop_s, 0.0, 1.0)
         return self._output(
             self.config.curve_drive_command,
             self.last_line_sign * self.config.maximum_wheel_angle_deg,
-            confidence,
+            0.25,
         )
 
 

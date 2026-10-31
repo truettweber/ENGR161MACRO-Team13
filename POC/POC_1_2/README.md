@@ -17,11 +17,12 @@ second.
 | Black | White | Full left steering |
 | White | Black | Full right steering |
 | White | White at startup | Stop and wait for the line |
-| White | White after tracking | Continue the last full correction for up to 1 second |
+| White | White after tracking | Continue the last full correction until reacquisition |
 
-If the line remains lost for one second, the controller enters `fault` and
-stops instead of turning indefinitely. When both sensors see black again, the
-steering target returns to zero immediately.
+When both sensors see black again, the steering target returns to zero
+immediately. Once tracking has begun, the controller does not stop merely
+because both sensors are white; it keeps turning toward the last observed line
+side until the line is reacquired or the operator stops/overrides the run.
 
 Full correction is +/-90 steering-motor degrees, corresponding to +/-26.16
 wheel degrees. The steering position gain is 1.75 and its Build HAT command is
@@ -92,4 +93,4 @@ Run data is written to `/tmp/macro_line_following_TIMESTAMP.csv` unless
 
 - `acquire`: stopped until at least one sensor sees black
 - `track`: the four-state bang-bang behavior above
-- `fault`: stopped after prolonged line loss or coupled-motor disagreement
+- `fault`: stopped after coupled-motor disagreement
