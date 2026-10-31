@@ -58,6 +58,7 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(args.steering_motor_port, "B")
         self.assertEqual(args.left_line_pin, 26)
         self.assertEqual(args.right_line_pin, 22)
+        self.assertEqual(args.button_pin, 24)
         self.assertEqual(args.drive_motor_2_direction, -1)
         self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
 

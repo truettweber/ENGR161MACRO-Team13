@@ -18,8 +18,9 @@ Grove IMU. It deliberately does not use the magnetometer.
    positive yaw rate.
 6. Place each line finder over black and white paper. The program uses the
    supplied `line_detected` property, which should be true over black.
-7. Verify that Ctrl+C stops both drive motors and the steering motor while the
-   wheels are still lifted.
+7. Connect the Grove start/stop button to D24. Verify that either a second
+   button press or Ctrl+C stops both drive motors and the steering motor while
+   the wheels are still lifted.
 
 Keep the robot still and level during the two-second IMU calibration every time
 the program starts.
@@ -41,9 +42,9 @@ value because the course permits broken-line gaps up to 3 inches.
 ## Run
 
 The current robot values from the team's Pi script are defaults: drive motors
-C and D, steering motor B, left line finder D26, right line finder D22, 9.74
-inches per drive-motor rotation, and reversed direction for drive motor D.
-Running without arguments uses those values:
+C and D, steering motor B, left line finder D26, right line finder D22,
+start/stop button D24, 9.74 inches per drive-motor rotation, and reversed
+direction for drive motor D. Running without arguments uses those values:
 
 ```text
 python3 POC/POC_1_2/robust_line_following.py
@@ -58,6 +59,7 @@ python3 POC/POC_1_2/robust_line_following.py \
   --steering-motor-port C \
   --left-line-pin 24 \
   --right-line-pin 26 \
+  --button-pin 18 \
   --inches-per-motor-rotation MEASURED_VALUE
 ```
 
@@ -74,6 +76,11 @@ If another motor or IMU axis is reversed, add the relevant option with `-1`:
 
 The steering sign must make a positive steering target turn the vehicle right.
 The yaw sign must make a physical right turn produce positive yaw.
+
+After the two-second IMU calibration, the motors remain stopped. Press and
+release the Grove button to begin the run. Press the button again or press
+Ctrl+C to stop the run and exit. Ctrl+C is always a stop command; it is not
+used to start the process because it raises Python's keyboard interrupt.
 
 ## Import troubleshooting
 

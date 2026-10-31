@@ -14,6 +14,7 @@ Hardware assumptions
   limited to +/-80 motor degrees.
 * Two Grove line finders are mounted 0.375 inch either side of the centerline
   and 1.75 inches ahead of the front axle.
+* A Grove button starts the run after calibration and stops an active run.
 * The IMU X axis points forward, Y points down, and Z is lateral. Therefore
   yaw rate is read from the Y gyro axis. Magnetometer readings are not used.
 
@@ -223,6 +224,7 @@ class HardwareConfig:
     steering_motor_port: str
     left_line_pin: int
     right_line_pin: int
+    button_pin: int
     inches_per_motor_rotation: float
     drive_motor_1_direction: int = 1
     drive_motor_2_direction: int = 1
@@ -243,6 +245,8 @@ class HardwareConfig:
             raise ValueError("all three motors must use different Build HAT ports")
         if self.left_line_pin == self.right_line_pin:
             raise ValueError("left and right line finders must use different pins")
+        if self.button_pin in {self.left_line_pin, self.right_line_pin}:
+            raise ValueError("the button and line finders must use different pins")
         if self.inches_per_motor_rotation <= 0:
             raise ValueError("inches per motor rotation must be greater than zero")
         for direction in (
@@ -721,6 +725,11 @@ class HardwareRobot:
             self._raise_import_error("Grove line-finder driver", error)
 
         try:
+            from gpiozero import Button as GpioButton
+        except ImportError as error:
+            self._raise_import_error("Grove push-button driver", error)
+
+        try:
             from basehat.IMUSensor import GroveIMU9DOFICM20600
         except ImportError as error:
             self._raise_import_error("Grove IMU Python driver", error)
@@ -737,6 +746,11 @@ class HardwareRobot:
         self.steering_motor = Motor(hardware.steering_motor_port.upper())
         self.left_line = LineFinder(hardware.left_line_pin)
         self.right_line = LineFinder(hardware.right_line_pin)
+        self.start_stop_button = GpioButton(
+            hardware.button_pin,
+            pull_up=True,
+            bounce_time=0.05,
+        )
         # Initialize only the accelerometer/gyroscope chip. The public
         # IMUSensor wrapper also initializes and writes to the AK09918
         # magnetometer, which this robot intentionally does not use.
@@ -970,9 +984,13 @@ class HardwareRobot:
         if errors:
             print(f"Warning: {len(errors)} motor stop command(s) failed.", file=sys.stderr)
 
+    @property
+    def button_pressed(self) -> bool:
+        return bool(self.start_stop_button.is_pressed)
+
     def close(self) -> None:
         self.stop_all()
-        for sensor_name in ("left_line", "right_line"):
+        for sensor_name in ("left_line", "right_line", "start_stop_button"):
             sensor = getattr(self, sensor_name, None)
             close = getattr(sensor, "close", None)
             if callable(close):
@@ -1057,6 +1075,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--steering-motor-port", choices="ABCD", default="B")
     parser.add_argument("--left-line-pin", type=int, default=26)
     parser.add_argument("--right-line-pin", type=int, default=22)
+    parser.add_argument("--button-pin", type=int, default=24)
     parser.add_argument(
         "--inches-per-motor-rotation",
         type=float,
@@ -1089,13 +1108,39 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=Path,
         help="CSV output path; defaults to /tmp with a timestamp",
     )
-    parser.add_argument(
-        "--countdown-seconds",
-        type=int,
-        default=3,
-        help="delay after calibration before movement; zero disables it",
-    )
     return parser
+
+
+def wait_for_button_state(
+    robot: HardwareRobot,
+    pressed: bool,
+    stable_s: float = 0.10,
+    poll_s: float = 0.01,
+) -> None:
+    """Wait until the button remains in one state long enough to reject bounce."""
+
+    stable_since: Optional[float] = None
+    while True:
+        now = time.monotonic()
+        if robot.button_pressed == pressed:
+            if stable_since is None:
+                stable_since = now
+            elif now - stable_since >= stable_s:
+                return
+        else:
+            stable_since = None
+        time.sleep(poll_s)
+
+
+def wait_for_start_button(robot: HardwareRobot) -> None:
+    """Require an intentional press-and-release before allowing motion."""
+
+    robot.stop_all()
+    wait_for_button_state(robot, pressed=False)
+    print("IMU calibration complete. Press the Grove button to start.")
+    wait_for_button_state(robot, pressed=True)
+    print("Start requested. Release the button to arm it as the stop control.")
+    wait_for_button_state(robot, pressed=False)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -1110,6 +1155,7 @@ def run(args: argparse.Namespace) -> int:
         steering_motor_port=args.steering_motor_port,
         left_line_pin=args.left_line_pin,
         right_line_pin=args.right_line_pin,
+        button_pin=args.button_pin,
         inches_per_motor_rotation=args.inches_per_motor_rotation,
         drive_motor_1_direction=args.drive_motor_1_direction,
         drive_motor_2_direction=args.drive_motor_2_direction,
@@ -1132,14 +1178,23 @@ def run(args: argparse.Namespace) -> int:
     try:
         robot = HardwareRobot(hardware_config, config)
         robot.calibrate_imu()
-        for remaining in range(max(0, args.countdown_seconds), 0, -1):
-            print(f"Starting in {remaining}...")
-            time.sleep(1.0)
+        wait_for_start_button(robot)
         run_logger = CsvRunLogger(log_path)
-        print(f"Running. Press Ctrl+C to stop. Log: {log_path}")
+        print(f"Running. Press the Grove button or Ctrl+C to stop. Log: {log_path}")
+
+        stop_button_since: Optional[float] = None
 
         while True:
             loop_started = time.monotonic()
+            if robot.button_pressed:
+                if stop_button_since is None:
+                    stop_button_since = loop_started
+                elif loop_started - stop_button_since >= 0.10:
+                    print("Stop button pressed; stopping all motors.")
+                    return 0
+            else:
+                stop_button_since = None
+
             observation = robot.read(debouncer)
             output = controller.update(observation)
             robot.apply(output)
