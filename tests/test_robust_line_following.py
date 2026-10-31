@@ -1,15 +1,23 @@
 """Hardware-independent behavioral tests for the robust line follower."""
 
+import os
 import unittest
+from pathlib import Path
 
 from POC.POC_1_2.robust_line_following import (
     ControllerState,
+    DebouncedButtonToggle,
+    KeyboardSnapshot,
+    LinuxKeyboardInput,
     LineDebouncer,
     LineFollowerController,
     Observation,
+    OperatingMode,
     PROJECT_LIBRARY_DIRECTORY,
     RobotConfig,
     build_argument_parser,
+    choose_operating_mode,
+    manual_output,
     wrap_degrees,
 )
 
@@ -60,8 +68,85 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(args.right_line_pin, 22)
         self.assertEqual(args.button_pin, 24)
         self.assertEqual(args.drive_motor_2_direction, -1)
-        self.assertEqual(args.steering_direction, -1)
+        self.assertEqual(args.steering_direction, 1)
         self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
+
+    def test_button_emits_one_toggle_per_stable_press(self) -> None:
+        button = DebouncedButtonToggle(False, 0.0)
+        self.assertFalse(button.update(True, 0.01))
+        self.assertFalse(button.update(True, 0.05))
+        self.assertTrue(button.update(True, 0.12))
+        self.assertFalse(button.update(True, 0.25))
+        self.assertFalse(button.update(False, 0.26))
+        self.assertFalse(button.update(False, 0.37))
+        self.assertFalse(button.update(True, 0.38))
+        self.assertTrue(button.update(True, 0.49))
+
+    def test_alt_toggles_autonomy_and_arrows_override_it(self) -> None:
+        self.assertEqual(
+            choose_operating_mode(OperatingMode.WAITING, True, False),
+            OperatingMode.AUTONOMOUS,
+        )
+        self.assertEqual(
+            choose_operating_mode(OperatingMode.AUTONOMOUS, True, False),
+            OperatingMode.WAITING,
+        )
+        self.assertEqual(
+            choose_operating_mode(OperatingMode.AUTONOMOUS, False, True),
+            OperatingMode.MANUAL,
+        )
+        self.assertEqual(
+            choose_operating_mode(OperatingMode.AUTONOMOUS, True, True),
+            OperatingMode.MANUAL,
+        )
+
+    def test_arrow_keys_drive_and_steer_in_manual_mode(self) -> None:
+        config = RobotConfig()
+        forward_left = manual_output(
+            KeyboardSnapshot(up=True, left=True),
+            config,
+        )
+        self.assertEqual(forward_left.state, ControllerState.MANUAL)
+        self.assertGreater(forward_left.drive_command, 0.0)
+        self.assertLess(forward_left.steering_wheel_deg, 0.0)
+
+        reverse_right = manual_output(
+            KeyboardSnapshot(down=True, right=True),
+            config,
+        )
+        self.assertLess(reverse_right.drive_command, 0.0)
+        self.assertGreater(reverse_right.steering_wheel_deg, 0.0)
+
+        released = manual_output(KeyboardSnapshot(), config)
+        self.assertEqual(released.drive_command, 0.0)
+        self.assertEqual(released.steering_wheel_deg, 0.0)
+
+    def test_linux_input_events_report_alt_and_arrow_state(self) -> None:
+        keyboard = LinuxKeyboardInput([])
+        read_fd, write_fd = os.pipe()
+        keyboard._fds.append(read_fd)
+        keyboard._paths.append(Path("/test/keyboard"))
+        try:
+            os.write(
+                write_fd,
+                keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, keyboard.KEY_LEFTALT, 1)
+                + keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, 103, 1),
+            )
+            pressed = keyboard.poll()
+            self.assertTrue(pressed.alt_pressed)
+            self.assertTrue(pressed.arrow_activity)
+            self.assertTrue(pressed.up)
+
+            os.write(
+                write_fd,
+                keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, 103, 0),
+            )
+            released = keyboard.poll()
+            self.assertFalse(released.alt_pressed)
+            self.assertFalse(released.up)
+        finally:
+            keyboard.close()
+            os.close(write_fd)
 
     def test_course_library_is_found_from_repository_layout(self) -> None:
         self.assertIsNotNone(PROJECT_LIBRARY_DIRECTORY)

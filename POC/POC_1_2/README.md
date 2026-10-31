@@ -18,9 +18,11 @@ Grove IMU. It deliberately does not use the magnetometer.
    positive yaw rate.
 6. Place each line finder over black and white paper. The program uses the
    supplied `line_detected` property, which should be true over black.
-7. Connect the Grove start/stop button to D24. Verify that either a second
-   button press or Ctrl+C stops both drive motors and the steering motor while
-   the wheels are still lifted.
+7. Connect the Grove start/stop button to D24. Verify that the Grove button or
+   Alt switches from autonomous mode to the stopped waiting mode while the
+   wheels are still lifted. Ctrl+C must stop all motors and exit.
+8. Test manual control with the wheels lifted: Up/Down drive forward/reverse,
+   Left/Right steer, and releasing the arrows stops/centers those commands.
 
 Keep the robot still and level during the two-second IMU calibration every time
 the program starts.
@@ -43,9 +45,9 @@ value because the course permits broken-line gaps up to 3 inches.
 
 The current robot values from the team's Pi script are defaults: drive motors
 C and D, steering motor B, left line finder D26, right line finder D22,
-start/stop button D24, 9.74 inches per drive-motor rotation, and reversed
-direction for drive motor D and the steering motor. Running without arguments
-uses those values:
+start/stop button D24, 9.74 inches per drive-motor rotation, reversed direction
+for drive motor D, and normal (`1`) direction for the steering motor. Running
+without arguments uses those values:
 
 ```text
 python3 POC/POC_1_2/robust_line_following.py
@@ -64,8 +66,7 @@ python3 POC/POC_1_2/robust_line_following.py \
   --inches-per-motor-rotation MEASURED_VALUE
 ```
 
-Direction values can be overridden with `-1` or `1`. The current defaults for
-drive motor D and steering are already `-1`:
+Direction values can be overridden with `-1` or `1`:
 
 ```text
 --drive-motor-1-direction -1
@@ -79,12 +80,33 @@ drive motor D and steering are already `-1`:
 The steering sign must make a positive steering target turn the vehicle right.
 The yaw sign must make a physical right turn produce positive yaw.
 
-After the two-second IMU calibration, the motors remain stopped. Press and
-release the Grove button to begin the run. Press the button again or press
-Ctrl+C to stop the run and exit. Ctrl+C is always a stop command; it is not
-used to start the process because it raises Python's keyboard interrupt. The
-Grove button is configured as active-high: released reads 0 and pressed reads
-1, matching the supplied course hardware documentation.
+After the two-second IMU calibration, the program enters a waiting state with
+all motors stopped. Press the Grove button or either Alt key to start
+autonomous mode. Press either control again to return to waiting without
+exiting. Pressing any arrow key immediately overrides autonomous mode and
+enters manual mode:
+
+- Up: drive forward
+- Down: drive backward
+- Left/Right: steer left/right
+- Multiple arrows: combine steering and drive
+- Release the arrows: command zero drive and centered steering while remaining
+  in manual mode
+
+From manual mode, press Alt or the Grove button to start autonomous mode again.
+Ctrl+C remains the emergency stop: it stops all motors and exits. The Grove
+button is active-high: released reads 0 and pressed reads 1.
+
+The program reads Linux `/dev/input/event*` devices because a terminal cannot
+report a standalone Alt press. If it prints a keyboard permission warning, run:
+
+```text
+sudo usermod -aG input team_13
+```
+
+Then log out and back in (or reboot) before running the program again. Use
+`--keyboard-device /dev/input/eventN` to select one device explicitly, or
+`--no-keyboard-control` to run with only the Grove button.
 
 ## Import troubleshooting
 
@@ -104,12 +126,13 @@ Import failures now identify the exact missing module. If the error names
 missing from the Raspberry Pi installation.
 
 Run data is written by default to a timestamped CSV file under `/tmp`. Use
-`--log-file PATH` to retain it elsewhere. Press Ctrl+C for the manual stop; the
-shutdown path issues stop commands to all three motors even if another motor
-stop command fails.
+`--log-file PATH` to retain it elsewhere. The Ctrl+C shutdown path issues stop
+commands to all three motors even if another motor stop command fails.
 
 ## Controller states
 
+- `waiting`: all motors are stopped pending Alt, button, or arrow-key input.
+- `manual`: arrow keys directly control drive and steering.
 - `acquire`: move slowly and find the starting line.
 - `track`: follow visible line readings and damp turns with IMU yaw rate.
 - `gap_predict`: preserve measured curvature for up to 3.5 inches.

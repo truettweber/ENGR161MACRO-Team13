@@ -14,14 +14,15 @@ Hardware assumptions
   limited to +/-80 motor degrees.
 * Two Grove line finders are mounted 0.375 inch either side of the centerline
   and 1.75 inches ahead of the front axle.
-* A Grove button starts the run after calibration and stops an active run.
+* A Grove button or keyboard Alt key toggles autonomous operation after
+  calibration. Arrow keys immediately override autonomy for manual driving.
 * The IMU X axis points forward, Y points down, and Z is lateral. Therefore
   yaw rate is read from the Y gyro axis. Magnetometer readings are not used.
 
 The controller follows solid lines, predicts through gaps, performs a bounded
 search after a genuine loss, slows for curves, detects obstacles from the IMU
 and encoder response, and performs a short reverse retry after a stall. Ctrl+C
-always stops every motor through the main function's finally block.
+always exits and stops every motor through the main function's finally block.
 """
 
 from __future__ import annotations
@@ -29,7 +30,10 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
+import select
 import signal
+import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -130,6 +134,8 @@ def require_direction(value: str) -> int:
 
 
 class ControllerState(Enum):
+    WAITING = "waiting"
+    MANUAL = "manual"
     ACQUIRE = "acquire"
     TRACK = "track"
     GAP_PREDICT = "gap_predict"
@@ -160,6 +166,10 @@ class RobotConfig:
     search_drive_command: float = 16.0
     obstacle_drive_command: float = 20.0
     reverse_drive_command: float = 15.0
+
+    # Manual arrow-key control
+    manual_drive_command: float = 25.0
+    manual_steering_fraction: float = 0.75
 
     # Steering motor position loop
     steering_position_kp: float = 1.25
@@ -228,7 +238,7 @@ class HardwareConfig:
     inches_per_motor_rotation: float
     drive_motor_1_direction: int = 1
     drive_motor_2_direction: int = 1
-    steering_direction: int = -1
+    steering_direction: int = 1
     yaw_direction: int = 1
     pitch_direction: int = 1
     roll_direction: int = 1
@@ -293,6 +303,211 @@ class ControlOutput:
     curvature_per_in: float
     line_confidence: float
     reason: str = ""
+
+
+class OperatingMode(Enum):
+    WAITING = "waiting"
+    AUTONOMOUS = "autonomous"
+    MANUAL = "manual"
+
+
+@dataclass(frozen=True)
+class KeyboardSnapshot:
+    alt_pressed: bool = False
+    arrow_activity: bool = False
+    up: bool = False
+    down: bool = False
+    left: bool = False
+    right: bool = False
+
+
+class LinuxKeyboardInput:
+    """Read global Alt and arrow-key events without an external package.
+
+    A standalone Alt press is not sent through terminal stdin, including the
+    Thonny shell. Linux input-event devices expose both presses and releases,
+    which also lets manual commands stop immediately when an arrow is released.
+    """
+
+    EVENT = struct.Struct("@llHHi")
+    EV_KEY = 0x01
+    KEY_LEFTALT = 56
+    KEY_RIGHTALT = 100
+    ARROW_CODES = {
+        103: "up",
+        108: "down",
+        105: "left",
+        106: "right",
+    }
+
+    def __init__(self, device_paths: Optional[Sequence[Path]] = None):
+        paths = (
+            list(device_paths)
+            if device_paths is not None
+            else sorted(Path("/dev/input").glob("event*"))
+        )
+        self._fds: list[int] = []
+        self._paths: list[Path] = []
+        self._pressed_arrows: set[str] = set()
+        self.permission_denied = False
+        for path in paths:
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            except PermissionError:
+                self.permission_denied = True
+                continue
+            except OSError:
+                continue
+            self._fds.append(fd)
+            self._paths.append(path)
+
+    @property
+    def available(self) -> bool:
+        return bool(self._fds)
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return tuple(self._paths)
+
+    def poll(self) -> KeyboardSnapshot:
+        alt_pressed = False
+        arrow_activity = False
+        if self._fds:
+            readable, _, _ = select.select(self._fds, [], [], 0.0)
+        else:
+            readable = []
+
+        for fd in readable:
+            try:
+                data = os.read(fd, self.EVENT.size * 32)
+            except BlockingIOError:
+                continue
+            except OSError:
+                self._remove_fd(fd)
+                self._pressed_arrows.clear()
+                continue
+
+            complete_bytes = len(data) - (len(data) % self.EVENT.size)
+            for offset in range(0, complete_bytes, self.EVENT.size):
+                _, _, event_type, code, value = self.EVENT.unpack_from(data, offset)
+                if event_type != self.EV_KEY:
+                    continue
+                if code in (self.KEY_LEFTALT, self.KEY_RIGHTALT):
+                    if value == 1:
+                        alt_pressed = True
+                    continue
+                arrow = self.ARROW_CODES.get(code)
+                if arrow is None:
+                    continue
+                if value == 1:
+                    arrow_activity = True
+                    self._pressed_arrows.add(arrow)
+                elif value == 0:
+                    self._pressed_arrows.discard(arrow)
+
+        return KeyboardSnapshot(
+            alt_pressed=alt_pressed,
+            arrow_activity=arrow_activity,
+            up="up" in self._pressed_arrows,
+            down="down" in self._pressed_arrows,
+            left="left" in self._pressed_arrows,
+            right="right" in self._pressed_arrows,
+        )
+
+    def _remove_fd(self, fd: int) -> None:
+        try:
+            index = self._fds.index(fd)
+        except ValueError:
+            return
+        self._fds.pop(index)
+        self._paths.pop(index)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    def close(self) -> None:
+        for fd in self._fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._fds.clear()
+        self._paths.clear()
+        self._pressed_arrows.clear()
+
+
+class DebouncedButtonToggle:
+    """Emit one toggle for each stable robot-button press."""
+
+    def __init__(self, initial_pressed: bool, now: float, stable_s: float = 0.10):
+        self.stable_s = stable_s
+        self._stable = bool(initial_pressed)
+        self._candidate = self._stable
+        self._candidate_since = now
+        self._armed = not self._stable
+
+    def update(self, pressed: bool, now: float) -> bool:
+        pressed = bool(pressed)
+        if pressed != self._candidate:
+            self._candidate = pressed
+            self._candidate_since = now
+            return False
+        if pressed == self._stable or now - self._candidate_since < self.stable_s:
+            return False
+
+        self._stable = pressed
+        if not pressed:
+            self._armed = True
+            return False
+        if self._armed:
+            self._armed = False
+            return True
+        return False
+
+
+def choose_operating_mode(
+    current: OperatingMode,
+    toggle_autonomous: bool,
+    arrow_activity: bool,
+) -> OperatingMode:
+    """Apply user inputs, with an arrow press taking highest priority."""
+
+    if arrow_activity:
+        return OperatingMode.MANUAL
+    if toggle_autonomous:
+        if current == OperatingMode.AUTONOMOUS:
+            return OperatingMode.WAITING
+        return OperatingMode.AUTONOMOUS
+    return current
+
+
+def inactive_output(state: ControllerState, reason: str) -> ControlOutput:
+    return ControlOutput(
+        state=state,
+        drive_command=0.0,
+        steering_wheel_deg=0.0,
+        curvature_per_in=0.0,
+        line_confidence=0.0,
+        reason=reason,
+    )
+
+
+def manual_output(keys: KeyboardSnapshot, config: RobotConfig) -> ControlOutput:
+    drive_sign = int(keys.up) - int(keys.down)
+    steering_sign = int(keys.right) - int(keys.left)
+    return ControlOutput(
+        state=ControllerState.MANUAL,
+        drive_command=config.manual_drive_command * drive_sign,
+        steering_wheel_deg=(
+            config.maximum_wheel_angle_deg
+            * config.manual_steering_fraction
+            * steering_sign
+        ),
+        curvature_per_in=0.0,
+        line_confidence=0.0,
+        reason="arrow-key manual control",
+    )
 
 
 class LineDebouncer:
@@ -1089,8 +1304,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--steering-direction",
         type=require_direction,
-        default=-1,
-        help="motor/encoder direction; defaults to -1 for the current linkage",
+        default=1,
+        help="motor/encoder direction; defaults to 1 for the current linkage",
     )
     parser.add_argument(
         "--yaw-direction",
@@ -1110,39 +1325,41 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=Path,
         help="CSV output path; defaults to /tmp with a timestamp",
     )
+    parser.add_argument(
+        "--keyboard-device",
+        type=Path,
+        action="append",
+        help=(
+            "Linux /dev/input/event device to read; may be repeated. "
+            "By default every readable event device is checked."
+        ),
+    )
+    parser.add_argument(
+        "--no-keyboard-control",
+        action="store_true",
+        help="disable Alt and arrow-key control and use only the Grove button",
+    )
     return parser
 
 
-def wait_for_button_state(
-    robot: HardwareRobot,
-    pressed: bool,
-    stable_s: float = 0.10,
-    poll_s: float = 0.01,
-) -> None:
-    """Wait until the button remains in one state long enough to reject bounce."""
-
-    stable_since: Optional[float] = None
-    while True:
-        now = time.monotonic()
-        if robot.button_pressed == pressed:
-            if stable_since is None:
-                stable_since = now
-            elif now - stable_since >= stable_s:
-                return
-        else:
-            stable_since = None
-        time.sleep(poll_s)
-
-
-def wait_for_start_button(robot: HardwareRobot) -> None:
-    """Require an intentional press-and-release before allowing motion."""
-
-    robot.stop_all()
-    wait_for_button_state(robot, pressed=False)
-    print("IMU calibration complete. Press the Grove button to start.")
-    wait_for_button_state(robot, pressed=True)
-    print("Start requested. Release the button to arm it as the stop control.")
-    wait_for_button_state(robot, pressed=False)
+def describe_keyboard(keyboard: LinuxKeyboardInput) -> None:
+    if keyboard.available:
+        devices = ", ".join(str(path) for path in keyboard.paths)
+        print(f"Keyboard control enabled through: {devices}")
+        return
+    if keyboard.permission_denied:
+        print(
+            "WARNING: Keyboard devices exist but cannot be read. The Grove "
+            "button will still work. Add this account to the input group with "
+            "'sudo usermod -aG input team_13', then log out and back in.",
+            file=sys.stderr,
+        )
+        return
+    print(
+        "WARNING: No readable Linux keyboard input device was found; "
+        "the Grove button will still work.",
+        file=sys.stderr,
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -1173,6 +1390,7 @@ def run(args: argparse.Namespace) -> int:
     controller = LineFollowerController(config)
     debouncer = LineDebouncer(config.line_debounce_s)
     robot: Optional[HardwareRobot] = None
+    keyboard: Optional[LinuxKeyboardInput] = None
     run_logger: Optional[CsvRunLogger] = None
     previous_state: Optional[ControllerState] = None
     loop_period = 1.0 / config.loop_hz
@@ -1180,34 +1398,82 @@ def run(args: argparse.Namespace) -> int:
     try:
         robot = HardwareRobot(hardware_config, config)
         robot.calibrate_imu()
-        wait_for_start_button(robot)
-        run_logger = CsvRunLogger(log_path)
-        print(f"Running. Press the Grove button or Ctrl+C to stop. Log: {log_path}")
+        robot.stop_all()
 
-        stop_button_since: Optional[float] = None
+        if not args.no_keyboard_control:
+            keyboard = LinuxKeyboardInput(args.keyboard_device)
+            describe_keyboard(keyboard)
+
+        now = time.monotonic()
+        button_toggle = DebouncedButtonToggle(robot.button_pressed, now)
+        operating_mode = OperatingMode.WAITING
+        run_logger = CsvRunLogger(log_path)
+        print(
+            "Waiting with all motors stopped. Press Alt or the Grove button "
+            "to start autonomous mode; press an arrow key for manual mode. "
+            f"Ctrl+C exits. Log: {log_path}"
+        )
 
         while True:
             loop_started = time.monotonic()
-            if robot.button_pressed:
-                if stop_button_since is None:
-                    stop_button_since = loop_started
-                elif loop_started - stop_button_since >= 0.10:
-                    print("Stop button pressed; stopping all motors.")
-                    return 0
-            else:
-                stop_button_since = None
+            keys = keyboard.poll() if keyboard is not None else KeyboardSnapshot()
+            button_pressed = button_toggle.update(robot.button_pressed, loop_started)
+            toggle_autonomous = button_pressed or keys.alt_pressed
+            arrows_held = keys.up or keys.down or keys.left or keys.right
+            requested_mode = choose_operating_mode(
+                operating_mode,
+                toggle_autonomous=toggle_autonomous,
+                arrow_activity=keys.arrow_activity or arrows_held,
+            )
+
+            if requested_mode != operating_mode:
+                robot.stop_all()
+                operating_mode = requested_mode
+                previous_state = None
+                if operating_mode == OperatingMode.AUTONOMOUS:
+                    controller = LineFollowerController(config)
+                    debouncer = LineDebouncer(config.line_debounce_s)
+                    print(
+                        "Autonomous mode started. Press Alt, the Grove button, "
+                        "or an arrow key to override it."
+                    )
+                elif operating_mode == OperatingMode.MANUAL:
+                    print(
+                        "Manual mode: hold arrows to steer and drive. "
+                        "Press Alt or the Grove button to restart autonomous mode."
+                    )
+                else:
+                    print(
+                        "Waiting with all motors stopped. Press Alt or the Grove "
+                        "button for autonomous mode, or an arrow key for manual mode."
+                    )
 
             observation = robot.read(debouncer)
-            output = controller.update(observation)
-            robot.apply(output)
+            if operating_mode == OperatingMode.AUTONOMOUS:
+                output = controller.update(observation)
+                robot.apply(output)
+            elif operating_mode == OperatingMode.MANUAL:
+                output = manual_output(keys, config)
+                robot.apply(output)
+            else:
+                output = inactive_output(
+                    ControllerState.WAITING,
+                    "waiting for Alt, Grove button, or arrow-key input",
+                )
             run_logger.write(observation, output)
 
             if output.state != previous_state:
                 print(f"State: {output.state.value} — {output.reason}")
                 previous_state = output.state
             if output.state == ControllerState.FAULT:
-                print(f"Safety stop: {output.reason}", file=sys.stderr)
-                return 2
+                robot.stop_all()
+                operating_mode = OperatingMode.WAITING
+                previous_state = None
+                print(
+                    f"Safety stop: {output.reason}. Waiting for a new Alt or "
+                    "Grove button press.",
+                    file=sys.stderr,
+                )
 
             remaining = loop_period - (time.monotonic() - loop_started)
             if remaining > 0:
@@ -1216,6 +1482,8 @@ def run(args: argparse.Namespace) -> int:
         print("\nCtrl+C received; stopping all motors.")
         return 0
     finally:
+        if keyboard is not None:
+            keyboard.close()
         if robot is not None:
             robot.close()
         if run_logger is not None:
