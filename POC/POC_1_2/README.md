@@ -28,11 +28,10 @@ Grove IMU. It deliberately does not use the magnetometer.
 Keep the robot still and level during the two-second IMU calibration every time
 the program starts.
 
-All drive commands are currently reduced to 50% of their original values to
-make line-tracking oscillation easier to observe and diagnose. This includes
-cruise, curves, gaps, searching, obstacle traversal, reverse recovery, and
-manual Up/Down control. This speed reduction remains in place with the
-stabilized steering settings below.
+All drive commands are currently 60% below the preceding half-speed settings
+(20% of the original commands) to make the startup and tracking behavior easier
+to diagnose. This includes cruise, curves, gaps, searching, obstacle traversal,
+reverse recovery, and manual Up/Down control.
 
 Line tracking is tuned to reduce oscillation: curvature ramps at `0.075`,
 command slew is `0.120`, and centered steering decays at `0.250`. Ordinary
@@ -46,6 +45,10 @@ commands straight only when no side has ever been observed. The steering
 position gain is `1.75` and its motor command is capped at `70` for faster rack
 motion. IMU yaw-rate and heading steering gains are currently zero until the
 IMU signal and yaw sign are verified; IMU values are still logged.
+
+At autonomous startup the robot remains stopped with straight steering until at
+least one line sensor detects black. It no longer times out into an arbitrary
+rightward search when the robot begins with both sensors on white.
 
 ## Measure encoder distance
 
@@ -66,8 +69,8 @@ value because the course permits broken-line gaps up to 3 inches.
 The current robot values from the team's Pi script are defaults: drive motors
 C and D, steering motor B, left line finder D26, right line finder D22,
 start/stop button D24, 9.74 inches per drive-motor rotation, and reversed
-direction for drive motor D and the steering motor. Running without arguments
-uses those values:
+direction for drive motor D. The steering direction defaults to `1`. Running
+without arguments uses those values:
 
 ```text
 python3 POC/POC_1_2/robust_line_following.py
@@ -91,7 +94,7 @@ Direction values can be overridden with `-1` or `1`:
 ```text
 --drive-motor-1-direction -1
 --drive-motor-2-direction 1
---steering-direction -1
+--steering-direction 1
 --yaw-direction -1
 --pitch-direction -1
 --roll-direction -1

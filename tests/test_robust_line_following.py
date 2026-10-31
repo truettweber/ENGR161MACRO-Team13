@@ -77,18 +77,18 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(args.right_line_pin, 22)
         self.assertEqual(args.button_pin, 24)
         self.assertEqual(args.drive_motor_2_direction, -1)
-        self.assertEqual(args.steering_direction, -1)
+        self.assertEqual(args.steering_direction, 1)
         self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
 
-    def test_drive_commands_are_reduced_by_half(self) -> None:
+    def test_drive_commands_are_reduced_sixty_percent_from_prior_values(self) -> None:
         config = RobotConfig()
-        self.assertEqual(config.cruise_drive_command, 15.0)
-        self.assertEqual(config.curve_drive_command, 11.0)
-        self.assertEqual(config.gap_drive_command, 11.0)
-        self.assertEqual(config.search_drive_command, 8.0)
-        self.assertEqual(config.obstacle_drive_command, 10.0)
-        self.assertEqual(config.reverse_drive_command, 7.5)
-        self.assertEqual(config.manual_drive_command, 12.5)
+        self.assertEqual(config.cruise_drive_command, 6.0)
+        self.assertEqual(config.curve_drive_command, 4.4)
+        self.assertEqual(config.gap_drive_command, 4.4)
+        self.assertEqual(config.search_drive_command, 3.2)
+        self.assertEqual(config.obstacle_drive_command, 4.0)
+        self.assertEqual(config.reverse_drive_command, 3.0)
+        self.assertEqual(config.manual_drive_command, 5.0)
 
     def test_steering_motor_uses_faster_position_commands(self) -> None:
         config = RobotConfig()
@@ -395,6 +395,17 @@ class LineFollowerControllerTests(unittest.TestCase):
         output = controller.update(observation(0.5, left=False, right=False, odometer=3.7))
         self.assertEqual(output.state, ControllerState.SEARCH)
 
+    def test_startup_without_a_visible_line_remains_stopped(self) -> None:
+        controller = LineFollowerController(RobotConfig())
+        controller.update(observation(0.0, left=False, right=False))
+        output = controller.update(
+            observation(2.0, left=False, right=False, odometer=0.0)
+        )
+        self.assertEqual(output.state, ControllerState.ACQUIRE)
+        self.assertEqual(output.drive_command, 0.0)
+        self.assertEqual(output.steering_wheel_deg, 0.0)
+        self.assertEqual(output.reason, "waiting for a line at startup")
+
     def test_obstacle_tilt_changes_state_and_reduces_speed(self) -> None:
         controller = LineFollowerController(RobotConfig())
         controller.update(observation(0.0))
@@ -404,10 +415,12 @@ class LineFollowerControllerTests(unittest.TestCase):
 
     def test_search_is_bounded_by_distance(self) -> None:
         controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0, left=False, right=False, speed=5.0))
-        controller.update(observation(1.1, left=False, right=False, odometer=1.0))
+        controller.update(observation(0.0))
+        controller.update(observation(0.025, left=False, right=True, odometer=0.1))
+        controller.update(observation(0.050, left=False, right=False, odometer=0.2))
+        controller.update(observation(0.5, left=False, right=False, odometer=3.8))
         self.assertEqual(controller.state, ControllerState.SEARCH)
-        output = controller.update(observation(2.0, left=False, right=False, odometer=13.1))
+        output = controller.update(observation(2.0, left=False, right=False, odometer=16.9))
         self.assertEqual(output.state, ControllerState.FAULT)
         self.assertEqual(output.drive_command, 0.0)
 

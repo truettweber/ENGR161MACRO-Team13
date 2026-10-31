@@ -166,15 +166,15 @@ class RobotConfig:
     imu_calibration_s: float = 2.0
 
     # Regulated motor commands, on the Build HAT -100..100 scale
-    cruise_drive_command: float = 15.0
-    curve_drive_command: float = 11.0
-    gap_drive_command: float = 11.0
-    search_drive_command: float = 8.0
-    obstacle_drive_command: float = 10.0
-    reverse_drive_command: float = 7.5
+    cruise_drive_command: float = 6.0
+    curve_drive_command: float = 4.4
+    gap_drive_command: float = 4.4
+    search_drive_command: float = 3.2
+    obstacle_drive_command: float = 4.0
+    reverse_drive_command: float = 3.0
 
     # Manual arrow-key control
-    manual_drive_command: float = 12.5
+    manual_drive_command: float = 5.0
     manual_steering_fraction: float = 0.75
 
     # Steering motor position loop
@@ -259,7 +259,7 @@ class HardwareConfig:
     inches_per_motor_rotation: float
     drive_motor_1_direction: int = 1
     drive_motor_2_direction: int = 1
-    steering_direction: int = -1
+    steering_direction: int = 1
     yaw_direction: int = 1
     pitch_direction: int = 1
     roll_direction: int = 1
@@ -1063,15 +1063,14 @@ class LineFollowerController:
             if any_line:
                 self._transition(ControllerState.TRACK, obs, "line acquired")
                 drive, curvature = self._track(obs)
-            elif (
-                obs.odometer_in - self.state_started_odometer >= 0.75
-                or self._state_elapsed(obs) >= 1.0
-            ):
-                self._transition(ControllerState.SEARCH, obs, "no line at startup")
-                drive, curvature = self._search(obs)
             else:
-                drive = self.config.search_drive_command
+                # Never guess a search direction before either sensor has seen
+                # the line. The old fallback always searched right, causing a
+                # repeatable right turn when autonomy began off the line.
+                self.reason = "waiting for a line at startup"
+                drive = 0.0
                 curvature = 0.0
+                self.curvature_command = 0.0
 
         elif self.state == ControllerState.TRACK:
             if not any_line:
@@ -1608,8 +1607,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--steering-direction",
         type=require_direction,
-        default=-1,
-        help="motor/encoder direction; defaults to -1 for the current linkage",
+        default=1,
+        help="motor/encoder direction; defaults to 1 for the current linkage",
     )
     parser.add_argument(
         "--yaw-direction",
