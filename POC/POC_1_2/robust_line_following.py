@@ -178,9 +178,9 @@ class RobotConfig:
     manual_steering_fraction: float = 0.75
 
     # Steering motor position loop
-    steering_position_kp: float = 1.25
+    steering_position_kp: float = 1.75
     steering_min_command: float = 8.0
-    steering_max_command: float = 45.0
+    steering_max_command: float = 70.0
     steering_deadband_motor_deg: float = 1.0
     steering_emergency_limit_deg: float = 90.0
 
@@ -790,29 +790,33 @@ def manual_output(keys: KeyboardSnapshot, config: RobotConfig) -> ControlOutput:
 
 
 class LineDebouncer:
-    """Require a line sensor pair to remain unchanged briefly before accepting it."""
+    """Debounce each line sensor independently to preserve departure order."""
 
     def __init__(self, debounce_s: float):
         self.debounce_s = debounce_s
-        self._stable = (False, False)
-        self._candidate = self._stable
-        self._candidate_since = 0.0
+        self._stable = [False, False]
+        self._candidate = [False, False]
+        self._candidate_since = [0.0, 0.0]
         self._initialized = False
 
     def update(self, left: bool, right: bool, now: float) -> tuple[bool, bool]:
         pair = (bool(left), bool(right))
         if not self._initialized:
-            self._stable = pair
-            self._candidate = pair
-            self._candidate_since = now
+            self._stable = list(pair)
+            self._candidate = list(pair)
+            self._candidate_since = [now, now]
             self._initialized = True
-            return self._stable
-        if pair != self._candidate:
-            self._candidate = pair
-            self._candidate_since = now
-        elif pair != self._stable and now - self._candidate_since >= self.debounce_s:
-            self._stable = pair
-        return self._stable
+            return tuple(self._stable)
+        for index, value in enumerate(pair):
+            if value != self._candidate[index]:
+                self._candidate[index] = value
+                self._candidate_since[index] = now
+            elif (
+                value != self._stable[index]
+                and now - self._candidate_since[index] >= self.debounce_s
+            ):
+                self._stable[index] = value
+        return tuple(self._stable)
 
 
 class LineFollowerController:
@@ -827,7 +831,7 @@ class LineFollowerController:
 
         self.curvature_command = 0.0
         self.measured_curvature = 0.0
-        self.last_line_sign = -1
+        self.last_line_sign = 0
         self.previous_line_sign = 0
         self.one_side_persistence_s = 0.0
         self.line_confidence = 0.0
@@ -875,7 +879,9 @@ class LineFollowerController:
                 self.gap_recovery_sign = 1
                 self.last_line_sign = 1
             else:
-                self.gap_recovery_sign = 0
+                # The control loop may miss the short one-sensor interval. Use
+                # the most recently observed side instead of assuming straight.
+                self.gap_recovery_sign = self.last_line_sign
         self.previous_line_pair = current
 
     def _line_sign(self, obs: Observation) -> int:
@@ -988,7 +994,7 @@ class LineFollowerController:
         # toward that side while crossing the bounded possible line gap.
         self.curvature_command = (
             self.gap_recovery_sign
-            * self.config.maximum_tracking_curvature_per_in
+            * self.config.maximum_curvature_per_in
             * self.config.gap_recovery_curvature_fraction
         )
         self.line_confidence = clamp(
@@ -1000,7 +1006,8 @@ class LineFollowerController:
     def _search(self, obs: Observation) -> tuple[float, float]:
         elapsed = self._state_elapsed(obs)
         phase = int(elapsed / self.config.search_sweep_s)
-        direction = self.last_line_sign * (-1 if phase % 2 else 1)
+        last_direction = self.last_line_sign or 1
+        direction = last_direction * (-1 if phase % 2 else 1)
         magnitude = self.config.initial_line_curvature_per_in + 0.012 * phase
         magnitude = min(
             magnitude,

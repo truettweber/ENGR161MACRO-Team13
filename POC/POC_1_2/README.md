@@ -38,11 +38,14 @@ Line tracking is tuned to reduce oscillation: curvature ramps at `0.075`,
 command slew is `0.120`, and centered steering decays at `0.250`. Ordinary
 tracking is capped at 60% of the full curvature range. When both sensors become
 white, the controller turns toward whichever sensor was the last one still on
-black. This applies the normal maximum tracking correction immediately. If both
-sensors leave black simultaneously, it commands straight because no departure
-direction was observed. IMU yaw-rate and heading steering gains are currently
-zero until the IMU signal and yaw sign are verified; IMU values are still
-logged.
+black. Each sensor is debounced independently so a short one-sensor interval is
+not discarded when the other sensor changes. Line-loss recovery applies full
+steering curvature immediately. If the control loop still observes both
+sensors leaving simultaneously, it uses the most recently known line side; it
+commands straight only when no side has ever been observed. The steering
+position gain is `1.75` and its motor command is capped at `70` for faster rack
+motion. IMU yaw-rate and heading steering gains are currently zero until the
+IMU signal and yaw sign are verified; IMU values are still logged.
 
 ## Measure encoder distance
 

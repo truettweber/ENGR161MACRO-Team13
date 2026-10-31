@@ -90,6 +90,11 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(config.reverse_drive_command, 7.5)
         self.assertEqual(config.manual_drive_command, 12.5)
 
+    def test_steering_motor_uses_faster_position_commands(self) -> None:
+        config = RobotConfig()
+        self.assertEqual(config.steering_position_kp, 1.75)
+        self.assertEqual(config.steering_max_command, 70.0)
+
     def test_button_emits_one_toggle_per_stable_press(self) -> None:
         button = DebouncedButtonToggle(False, 0.0)
         self.assertFalse(button.update(True, 0.01))
@@ -256,6 +261,14 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(debouncer.update(False, False, 0.030), (True, True))
         self.assertEqual(debouncer.update(False, False, 0.060), (False, False))
 
+    def test_line_debouncer_preserves_sensor_departure_order(self) -> None:
+        debouncer = LineDebouncer(0.025)
+        self.assertEqual(debouncer.update(True, True, 0.000), (True, True))
+        self.assertEqual(debouncer.update(False, True, 0.010), (True, True))
+        self.assertEqual(debouncer.update(False, False, 0.020), (True, True))
+        self.assertEqual(debouncer.update(False, False, 0.040), (False, True))
+        self.assertEqual(debouncer.update(False, False, 0.050), (False, False))
+
     def test_left_and_right_line_readings_command_correct_directions(self) -> None:
         left_controller = LineFollowerController(RobotConfig())
         left_controller.update(observation(0.0))
@@ -323,8 +336,9 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
         self.assertAlmostEqual(
             gap.curvature_per_in,
-            RobotConfig().maximum_tracking_curvature_per_in,
+            RobotConfig().maximum_curvature_per_in,
         )
+        self.assertAlmostEqual(gap.steering_wheel_deg, 26.16)
         self.assertGreater(gap.steering_wheel_deg, 0.0)
 
         reacquired = controller.update(
@@ -362,6 +376,17 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
         self.assertEqual(gap.steering_wheel_deg, 0.0)
         self.assertIn("commanding straight", gap.reason)
+
+    def test_simultaneous_loss_falls_back_to_last_known_line_side(self) -> None:
+        controller = LineFollowerController(RobotConfig())
+        controller.update(observation(0.000, left=False, right=True))
+        controller.update(observation(0.025, left=True, right=True))
+        gap = controller.update(
+            observation(0.050, left=False, right=False, odometer=0.1)
+        )
+        self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
+        self.assertAlmostEqual(gap.steering_wheel_deg, 26.16)
+        self.assertIn("turning right", gap.reason)
 
     def test_gap_longer_than_specification_enters_search(self) -> None:
         controller = LineFollowerController(RobotConfig())
