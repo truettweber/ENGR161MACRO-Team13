@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import math
 import os
 import select
@@ -315,6 +316,7 @@ class OperatingMode(Enum):
 class KeyboardSnapshot:
     alt_pressed: bool = False
     arrow_activity: bool = False
+    emergency_stop: bool = False
     up: bool = False
     down: bool = False
     left: bool = False
@@ -331,6 +333,9 @@ class LinuxKeyboardInput:
 
     EVENT = struct.Struct("@llHHi")
     EV_KEY = 0x01
+    KEY_C = 46
+    KEY_LEFTCTRL = 29
+    KEY_RIGHTCTRL = 97
     KEY_LEFTALT = 56
     KEY_RIGHTALT = 100
     ARROW_CODES = {
@@ -340,6 +345,18 @@ class LinuxKeyboardInput:
         106: "right",
     }
 
+    # Linux ioctl encoding from asm-generic/ioctl.h. EVIOCGRAB prevents Thonny
+    # or the desktop from also consuming arrows while this process owns them.
+    IOC_WRITE = 1
+    IOC_READ = 2
+    EVIOCGRAB = (
+        (IOC_WRITE << 30)
+        | (struct.calcsize("i") << 16)
+        | (ord("E") << 8)
+        | 0x90
+    )
+    KEY_BITMAP_BYTES = 128
+
     def __init__(self, device_paths: Optional[Sequence[Path]] = None):
         paths = (
             list(device_paths)
@@ -348,8 +365,11 @@ class LinuxKeyboardInput:
         )
         self._fds: list[int] = []
         self._paths: list[Path] = []
+        self._grabbed_fds: set[int] = set()
         self._pressed_arrows: set[str] = set()
+        self._pressed_ctrl: set[int] = set()
         self.permission_denied = False
+        self.grab_failed = False
         for path in paths:
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -358,8 +378,49 @@ class LinuxKeyboardInput:
                 continue
             except OSError:
                 continue
+            if not self._supports_robot_keys(fd):
+                os.close(fd)
+                continue
+            try:
+                fcntl.ioctl(fd, self.EVIOCGRAB, 1)
+            except OSError:
+                self.grab_failed = True
+            else:
+                self._grabbed_fds.add(fd)
             self._fds.append(fd)
             self._paths.append(path)
+
+    @classmethod
+    def _eviocgbit(cls, event_type: int, length: int) -> int:
+        return (
+            (cls.IOC_READ << 30)
+            | (length << 16)
+            | (ord("E") << 8)
+            | (0x20 + event_type)
+        )
+
+    @classmethod
+    def _supports_robot_keys(cls, fd: int) -> bool:
+        bitmap = bytearray(cls.KEY_BITMAP_BYTES)
+        try:
+            fcntl.ioctl(
+                fd,
+                cls._eviocgbit(cls.EV_KEY, len(bitmap)),
+                bitmap,
+                True,
+            )
+        except OSError:
+            return False
+
+        def supports(code: int) -> bool:
+            return bool(bitmap[code // 8] & (1 << (code % 8)))
+
+        return (
+            all(supports(code) for code in cls.ARROW_CODES)
+            and any(supports(code) for code in (cls.KEY_LEFTALT, cls.KEY_RIGHTALT))
+            and supports(cls.KEY_C)
+            and any(supports(code) for code in (cls.KEY_LEFTCTRL, cls.KEY_RIGHTCTRL))
+        )
 
     @property
     def available(self) -> bool:
@@ -369,9 +430,14 @@ class LinuxKeyboardInput:
     def paths(self) -> tuple[Path, ...]:
         return tuple(self._paths)
 
+    @property
+    def exclusive(self) -> bool:
+        return bool(self._fds) and len(self._grabbed_fds) == len(self._fds)
+
     def poll(self) -> KeyboardSnapshot:
         alt_pressed = False
         arrow_activity = False
+        emergency_stop = False
         if self._fds:
             readable, _, _ = select.select(self._fds, [], [], 0.0)
         else:
@@ -385,12 +451,22 @@ class LinuxKeyboardInput:
             except OSError:
                 self._remove_fd(fd)
                 self._pressed_arrows.clear()
+                self._pressed_ctrl.clear()
                 continue
 
             complete_bytes = len(data) - (len(data) % self.EVENT.size)
             for offset in range(0, complete_bytes, self.EVENT.size):
                 _, _, event_type, code, value = self.EVENT.unpack_from(data, offset)
                 if event_type != self.EV_KEY:
+                    continue
+                if code in (self.KEY_LEFTCTRL, self.KEY_RIGHTCTRL):
+                    if value == 1:
+                        self._pressed_ctrl.add(code)
+                    elif value == 0:
+                        self._pressed_ctrl.discard(code)
+                    continue
+                if code == self.KEY_C and value == 1 and self._pressed_ctrl:
+                    emergency_stop = True
                     continue
                 if code in (self.KEY_LEFTALT, self.KEY_RIGHTALT):
                     if value == 1:
@@ -408,6 +484,7 @@ class LinuxKeyboardInput:
         return KeyboardSnapshot(
             alt_pressed=alt_pressed,
             arrow_activity=arrow_activity,
+            emergency_stop=emergency_stop,
             up="up" in self._pressed_arrows,
             down="down" in self._pressed_arrows,
             left="left" in self._pressed_arrows,
@@ -421,6 +498,12 @@ class LinuxKeyboardInput:
             return
         self._fds.pop(index)
         self._paths.pop(index)
+        if fd in self._grabbed_fds:
+            try:
+                fcntl.ioctl(fd, self.EVIOCGRAB, 0)
+            except OSError:
+                pass
+            self._grabbed_fds.discard(fd)
         try:
             os.close(fd)
         except OSError:
@@ -428,13 +511,20 @@ class LinuxKeyboardInput:
 
     def close(self) -> None:
         for fd in self._fds:
+            if fd in self._grabbed_fds:
+                try:
+                    fcntl.ioctl(fd, self.EVIOCGRAB, 0)
+                except OSError:
+                    pass
             try:
                 os.close(fd)
             except OSError:
                 pass
         self._fds.clear()
         self._paths.clear()
+        self._grabbed_fds.clear()
         self._pressed_arrows.clear()
+        self._pressed_ctrl.clear()
 
 
 class DebouncedButtonToggle:
@@ -1345,7 +1435,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def describe_keyboard(keyboard: LinuxKeyboardInput) -> None:
     if keyboard.available:
         devices = ", ".join(str(path) for path in keyboard.paths)
-        print(f"Keyboard control enabled through: {devices}")
+        if keyboard.exclusive:
+            print(
+                f"Keyboard control exclusively captured through: {devices}. "
+                "Arrow keys will control only the robot until Ctrl+C exits."
+            )
+        else:
+            print(
+                f"WARNING: Keyboard detected at {devices}, but exclusive capture "
+                "failed. Close other programs using that device. If needed, run "
+                "'sudo usermod -aG input team_13', then log out and back in.",
+                file=sys.stderr,
+            )
         return
     if keyboard.permission_denied:
         print(
@@ -1417,6 +1518,8 @@ def run(args: argparse.Namespace) -> int:
         while True:
             loop_started = time.monotonic()
             keys = keyboard.poll() if keyboard is not None else KeyboardSnapshot()
+            if keys.emergency_stop:
+                raise KeyboardInterrupt
             button_pressed = button_toggle.update(robot.button_pressed, loop_started)
             toggle_autonomous = button_pressed or keys.alt_pressed
             arrows_held = keys.up or keys.down or keys.left or keys.right

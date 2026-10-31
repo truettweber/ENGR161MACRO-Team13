@@ -98,7 +98,11 @@ Ctrl+C remains the emergency stop: it stops all motors and exits. The Grove
 button is active-high: released reads 0 and pressed reads 1.
 
 The program reads Linux `/dev/input/event*` devices because a terminal cannot
-report a standalone Alt press. If it prints a keyboard permission warning, run:
+report a standalone Alt press. It exclusively captures the physical keyboard
+while running, so arrow keys control the robot instead of moving the cursor in
+Thonny. The program recognizes Ctrl+C directly from the captured keyboard and
+releases the device automatically when it exits. If it prints a keyboard
+permission or exclusive-capture warning, run:
 
 ```text
 sudo usermod -aG input team_13

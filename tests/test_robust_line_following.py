@@ -144,6 +144,15 @@ class LineFollowerControllerTests(unittest.TestCase):
             released = keyboard.poll()
             self.assertFalse(released.alt_pressed)
             self.assertFalse(released.up)
+
+            os.write(
+                write_fd,
+                keyboard.EVENT.pack(
+                    0, 0, keyboard.EV_KEY, keyboard.KEY_LEFTCTRL, 1
+                )
+                + keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, keyboard.KEY_C, 1),
+            )
+            self.assertTrue(keyboard.poll().emergency_stop)
         finally:
             keyboard.close()
             os.close(write_fd)
