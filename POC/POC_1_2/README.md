@@ -45,9 +45,9 @@ value because the course permits broken-line gaps up to 3 inches.
 
 The current robot values from the team's Pi script are defaults: drive motors
 C and D, steering motor B, left line finder D26, right line finder D22,
-start/stop button D24, 9.74 inches per drive-motor rotation, reversed direction
-for drive motor D, and normal (`1`) direction for the steering motor. Running
-without arguments uses those values:
+start/stop button D24, 9.74 inches per drive-motor rotation, and reversed
+direction for drive motor D and the steering motor. Running without arguments
+uses those values:
 
 ```text
 python3 POC/POC_1_2/robust_line_following.py
@@ -71,7 +71,7 @@ Direction values can be overridden with `-1` or `1`:
 ```text
 --drive-motor-1-direction -1
 --drive-motor-2-direction 1
---steering-direction 1
+--steering-direction -1
 --yaw-direction -1
 --pitch-direction -1
 --roll-direction -1
