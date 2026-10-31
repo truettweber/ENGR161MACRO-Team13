@@ -31,7 +31,16 @@ the program starts.
 All drive commands are currently reduced to 50% of their original values to
 make line-tracking oscillation easier to observe and diagnose. This includes
 cruise, curves, gaps, searching, obstacle traversal, reverse recovery, and
-manual Up/Down control. Steering range and response tuning are unchanged.
+manual Up/Down control. This speed reduction remains in place with the
+stabilized steering settings below.
+
+Line tracking is tuned to reduce oscillation: curvature ramps at `0.075`,
+command slew is `0.120`, and centered steering decays at `0.250`. Ordinary
+tracking is capped at 60% of the full curvature range. When both sensors become
+white, the controller retains only 25% of the prior correction (capped at the
+small initial correction), holds it for 0.15 second, and then decays toward
+straight. IMU yaw-rate and heading steering gains are currently zero until the
+IMU signal and yaw sign are verified; IMU values are still logged.
 
 ## Measure encoder distance
 
@@ -148,16 +157,18 @@ commands to all three motors even if another motor stop command fails.
 - `waiting`: all motors are stopped pending Alt, button, or arrow-key input.
 - `manual`: arrow keys directly control drive and steering.
 - `acquire`: move slowly and find the starting line.
-- `track`: follow visible line readings and damp turns with IMU yaw rate.
-- `gap_predict`: preserve measured curvature for up to 3.5 inches.
+- `track`: follow visible line readings with a capped correction and fast
+  recentering. IMU yaw steering correction is currently disabled.
+- `gap_predict`: briefly retain a small correction, then straighten while
+  crossing a gap of up to 3.5 inches.
 - `search`: perform a slow, bounded widening sweep toward the last line side.
-- `obstacle`: reduce speed and preserve heading while pitch, roll, acceleration,
-  and encoder progress indicate rough terrain.
+- `obstacle`: reduce speed and retain the entry curvature while pitch, roll,
+  acceleration, and encoder progress indicate rough terrain.
 - `recover_reverse`: back up briefly and retry a blocked obstacle.
 - `fault`: stop after encoder disagreement, failed recovery, or an exhausted
   line search.
 
 The course specification permits a 2-inch line radius, but this vehicle's
-5.5-inch wheelbase and safe steering limit produce an approximate 12.8-inch
+5.5-inch wheelbase and full steering limit produce an approximate 11.2-inch
 minimum center turning radius. Software cannot make the vehicle follow curves
 tighter than its mechanical turning radius.

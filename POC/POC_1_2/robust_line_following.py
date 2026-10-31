@@ -185,14 +185,18 @@ class RobotConfig:
     steering_emergency_limit_deg: float = 90.0
 
     # Line and yaw control
-    curvature_ramp_per_s: float = 0.150
-    centered_curvature_decay_per_s: float = 0.080
-    curvature_slew_per_s: float = 0.200
-    yaw_rate_curvature_gain: float = 0.0015
-    heading_curvature_gain: float = 0.0025
+    curvature_ramp_per_s: float = 0.075
+    centered_curvature_decay_per_s: float = 0.250
+    curvature_slew_per_s: float = 0.120
+    maximum_tracking_curvature_fraction: float = 0.60
+    yaw_rate_curvature_gain: float = 0.0
+    heading_curvature_gain: float = 0.0
 
     # Gap and search bounds from the project track specification
     maximum_predicted_gap_in: float = 3.5
+    gap_entry_curvature_fraction: float = 0.25
+    gap_curvature_hold_s: float = 0.15
+    gap_curvature_decay_per_s: float = 0.100
     search_sweep_s: float = 1.0
     maximum_search_s: float = 8.0
     maximum_search_distance_in: float = 12.0
@@ -226,6 +230,19 @@ class RobotConfig:
     @property
     def maximum_curvature_per_in(self) -> float:
         return math.tan(math.radians(self.maximum_wheel_angle_deg)) / self.wheelbase_in
+
+    @property
+    def maximum_tracking_curvature_per_in(self) -> float:
+        return (
+            self.maximum_curvature_per_in
+            * self.maximum_tracking_curvature_fraction
+        )
+
+    @property
+    def maximum_tracking_wheel_angle_deg(self) -> float:
+        return math.degrees(
+            math.atan(self.wheelbase_in * self.maximum_tracking_curvature_per_in)
+        )
 
     @property
     def initial_line_curvature_per_in(self) -> float:
@@ -842,11 +859,10 @@ class LineFollowerController:
         return max(0.0, obs.now - self.state_started_at)
 
     def _enter_gap(self, obs: Observation, reason: str) -> None:
-        measured = self.measured_curvature
         self.gap_curvature = clamp(
-            0.75 * self.curvature_command + 0.25 * measured,
-            -self.config.maximum_curvature_per_in,
-            self.config.maximum_curvature_per_in,
+            self.config.gap_entry_curvature_fraction * self.curvature_command,
+            -self.config.initial_line_curvature_per_in,
+            self.config.initial_line_curvature_per_in,
         )
         self.gap_heading_reference_deg = obs.yaw_deg
         self._transition(ControllerState.GAP_PREDICT, obs, reason)
@@ -912,7 +928,7 @@ class LineFollowerController:
                 + self.config.curvature_ramp_per_s * self.one_side_persistence_s
             )
             desired_curvature = line_sign * min(
-                magnitude, self.config.maximum_curvature_per_in
+                magnitude, self.config.maximum_tracking_curvature_per_in
             )
 
         if abs(obs.speed_ips) >= 0.5:
@@ -930,16 +946,24 @@ class LineFollowerController:
         )
         desired_curvature = clamp(
             desired_curvature,
-            -self.config.maximum_curvature_per_in,
-            self.config.maximum_curvature_per_in,
+            -self.config.maximum_tracking_curvature_per_in,
+            self.config.maximum_tracking_curvature_per_in,
         )
         self.curvature_command = move_toward(
             self.curvature_command,
             desired_curvature,
             self.config.curvature_slew_per_s * obs.dt,
         )
+        self.curvature_command = clamp(
+            self.curvature_command,
+            -self.config.maximum_tracking_curvature_per_in,
+            self.config.maximum_tracking_curvature_per_in,
+        )
 
-        curve_fraction = abs(self.curvature_command) / self.config.maximum_curvature_per_in
+        curve_fraction = (
+            abs(self.curvature_command)
+            / self.config.maximum_tracking_curvature_per_in
+        )
         drive = self.config.cruise_drive_command - curve_fraction * (
             self.config.cruise_drive_command - self.config.curve_drive_command
         )
@@ -948,19 +972,25 @@ class LineFollowerController:
 
     def _predict_gap(self, obs: Observation) -> tuple[float, float]:
         traveled = obs.odometer_in - self.state_started_odometer
+        if self._state_elapsed(obs) > self.config.gap_curvature_hold_s:
+            self.gap_curvature = move_toward(
+                self.gap_curvature,
+                0.0,
+                self.config.gap_curvature_decay_per_s * obs.dt,
+            )
         delta_distance = max(0.0, obs.odometer_in - self.last_odometer_in)
         self.gap_heading_reference_deg += math.degrees(self.gap_curvature * delta_distance)
         heading_error = wrap_degrees(self.gap_heading_reference_deg - obs.yaw_deg)
         curvature = self.gap_curvature + self.config.heading_curvature_gain * heading_error
         curvature = clamp(
             curvature,
-            -self.config.maximum_curvature_per_in,
-            self.config.maximum_curvature_per_in,
+            -self.config.initial_line_curvature_per_in,
+            self.config.initial_line_curvature_per_in,
         )
         self.curvature_command = move_toward(
             self.curvature_command,
             curvature,
-            self.config.curvature_slew_per_s * obs.dt,
+            self.config.centered_curvature_decay_per_s * obs.dt,
         )
         self.line_confidence = clamp(
             1.0 - traveled / self.config.maximum_predicted_gap_in, 0.0, 1.0
