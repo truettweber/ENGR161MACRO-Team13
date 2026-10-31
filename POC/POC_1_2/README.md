@@ -66,13 +66,21 @@ python3 POC/POC_1_2/robust_line_following.py \
   --library-directory /path/to/ENGR161MACRO-Team13/lib
 ```
 
-After motor initialization, the program waits with all motors stopped. Press
-the Grove button or Alt to start autonomy. Press either again to return to the
-waiting state. Any arrow key enters manual mode:
+After motor initialization, the program waits with all motors stopped:
+
+- Press Alt to start line following immediately.
+- Press the Grove button once to start line following. It begins after a
+  0.35-second double-press window.
+- Double-press the Grove button to enter straight-drive mode. It drives at the
+  current cruise command with centered steering and ignores the line sensors.
+- Press Alt or the Grove button while either autonomous mode is active to stop
+  and return to waiting.
+- Any arrow key enters manual mode.
 
 - Up/Down: forward/reverse
 - Left/Right: left/right steering
-- Alt or Grove button: restart autonomy
+- Alt: restart line following
+- Grove button once/double press: restart line following/straight drive
 - Ctrl+C: stop all motors and exit
 
 When direct Linux keyboard access is unavailable, a **MACRO Robot Keyboard

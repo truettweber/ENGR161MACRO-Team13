@@ -259,6 +259,7 @@ class ControlOutput:
 class OperatingMode(Enum):
     WAITING = "waiting"
     AUTONOMOUS = "autonomous"
+    STRAIGHT_DRIVE = "straight_drive"
     MANUAL = "manual"
 
 
@@ -675,6 +676,50 @@ class DebouncedButtonToggle:
         return False
 
 
+@dataclass(frozen=True)
+class ButtonPressEvent:
+    press_edge: bool = False
+    single_press: bool = False
+    double_press: bool = False
+
+
+class ButtonPressClassifier:
+    """Classify stable Grove-button presses without starting on the first tap."""
+
+    def __init__(
+        self,
+        initial_pressed: bool,
+        now: float,
+        double_press_window_s: float = 0.35,
+    ):
+        self._button = DebouncedButtonToggle(initial_pressed, now)
+        self.double_press_window_s = double_press_window_s
+        self._first_press_at: Optional[float] = None
+
+    def cancel(self) -> None:
+        self._first_press_at = None
+
+    def update(self, pressed: bool, now: float) -> ButtonPressEvent:
+        press_edge = self._button.update(pressed, now)
+        if press_edge:
+            if (
+                self._first_press_at is not None
+                and now - self._first_press_at <= self.double_press_window_s
+            ):
+                self._first_press_at = None
+                return ButtonPressEvent(press_edge=True, double_press=True)
+            self._first_press_at = now
+            return ButtonPressEvent(press_edge=True)
+
+        if (
+            self._first_press_at is not None
+            and now - self._first_press_at > self.double_press_window_s
+        ):
+            self._first_press_at = None
+            return ButtonPressEvent(single_press=True)
+        return ButtonPressEvent()
+
+
 def choose_operating_mode(
     current: OperatingMode,
     toggle_autonomous: bool,
@@ -716,6 +761,17 @@ def manual_output(keys: KeyboardSnapshot, config: RobotConfig) -> ControlOutput:
         curvature_per_in=0.0,
         line_confidence=0.0,
         reason="arrow-key manual control",
+    )
+
+
+def straight_drive_output(config: RobotConfig) -> ControlOutput:
+    return ControlOutput(
+        state=ControllerState.TRACK,
+        drive_command=config.cruise_drive_command,
+        steering_wheel_deg=0.0,
+        curvature_per_in=0.0,
+        line_confidence=0.0,
+        reason="double-press straight-drive mode",
     )
 
 
@@ -1305,19 +1361,21 @@ def run(args: argparse.Namespace) -> int:
             keyboard = create_keyboard_input(args.keyboard_device)
 
         now = time.monotonic()
-        button_toggle = DebouncedButtonToggle(robot.button_pressed, now)
+        button_presses = ButtonPressClassifier(robot.button_pressed, now)
         operating_mode = OperatingMode.WAITING
         run_logger = CsvRunLogger(log_path)
         if keyboard is not None:
             print(
                 "Waiting with all motors stopped. Press Alt or the Grove button "
-                "to start autonomous mode; press an arrow key for manual mode. "
+                "once to start line following, or double-press the Grove button "
+                "for straight drive. Press an arrow key for manual mode. "
                 f"Ctrl+C exits. Log: {log_path}"
             )
         else:
             print(
-                "Waiting with all motors stopped. Press the Grove button to "
-                f"start autonomous mode. Ctrl+C exits. Log: {log_path}"
+                "Waiting with all motors stopped. Press the Grove button once "
+                "to start line following, or double-press it for straight drive. "
+                f"Ctrl+C exits. Log: {log_path}"
             )
 
         while True:
@@ -1325,14 +1383,28 @@ def run(args: argparse.Namespace) -> int:
             keys = keyboard.poll() if keyboard is not None else KeyboardSnapshot()
             if keys.emergency_stop:
                 raise KeyboardInterrupt
-            button_pressed = button_toggle.update(robot.button_pressed, loop_started)
-            toggle_autonomous = button_pressed or keys.alt_pressed
+            button_event = button_presses.update(robot.button_pressed, loop_started)
             arrows_held = keys.up or keys.down or keys.left or keys.right
-            requested_mode = choose_operating_mode(
-                operating_mode,
-                toggle_autonomous=toggle_autonomous,
-                arrow_activity=keys.arrow_activity or arrows_held,
-            )
+            arrow_override = keys.arrow_activity or arrows_held
+            requested_mode = operating_mode
+
+            if arrow_override:
+                button_presses.cancel()
+                requested_mode = OperatingMode.MANUAL
+            elif operating_mode in {
+                OperatingMode.AUTONOMOUS,
+                OperatingMode.STRAIGHT_DRIVE,
+            }:
+                if button_event.press_edge or keys.alt_pressed:
+                    button_presses.cancel()
+                    requested_mode = OperatingMode.WAITING
+            elif keys.alt_pressed:
+                button_presses.cancel()
+                requested_mode = OperatingMode.AUTONOMOUS
+            elif button_event.double_press:
+                requested_mode = OperatingMode.STRAIGHT_DRIVE
+            elif button_event.single_press:
+                requested_mode = OperatingMode.AUTONOMOUS
 
             if requested_mode != operating_mode:
                 robot.stop_all()
@@ -1342,8 +1414,13 @@ def run(args: argparse.Namespace) -> int:
                     controller = LineFollowerController(config)
                     debouncer = LineDebouncer(config.line_debounce_s)
                     print(
-                        "Autonomous mode started. Press Alt, the Grove button, "
+                        "Line-following mode started. Press Alt, the Grove button, "
                         "or an arrow key to override it."
+                    )
+                elif operating_mode == OperatingMode.STRAIGHT_DRIVE:
+                    print(
+                        "Straight-drive mode started. Press Alt, the Grove button, "
+                        "or an arrow key to stop it."
                     )
                 elif operating_mode == OperatingMode.MANUAL:
                     print(
@@ -1353,12 +1430,16 @@ def run(args: argparse.Namespace) -> int:
                 else:
                     print(
                         "Waiting with all motors stopped. Press Alt or the Grove "
-                        "button for autonomous mode, or an arrow key for manual mode."
+                        "button once for line following, or double-press the button "
+                        "for straight drive."
                     )
 
             observation = robot.read(debouncer)
             if operating_mode == OperatingMode.AUTONOMOUS:
                 output = controller.update(observation)
+                robot.apply(output)
+            elif operating_mode == OperatingMode.STRAIGHT_DRIVE:
+                output = straight_drive_output(config)
                 robot.apply(output)
             elif operating_mode == OperatingMode.MANUAL:
                 output = manual_output(keys, config)

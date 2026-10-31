@@ -6,6 +6,7 @@ from pathlib import Path
 
 from POC.POC_1_2.robust_line_following import (
     ControllerState,
+    ButtonPressClassifier,
     DebouncedButtonToggle,
     KeyboardSnapshot,
     LinuxKeyboardInput,
@@ -19,6 +20,7 @@ from POC.POC_1_2.robust_line_following import (
     choose_operating_mode,
     line_value_is_black,
     manual_output,
+    straight_drive_output,
     wrap_degrees,
 )
 
@@ -171,6 +173,26 @@ class StraightLineControllerTests(unittest.TestCase):
         self.assertFalse(button.update(True, 0.01))
         self.assertTrue(button.update(True, 0.12))
         self.assertFalse(button.update(True, 0.25))
+
+    def test_button_single_and_double_press_actions(self) -> None:
+        button = ButtonPressClassifier(False, 0.0, double_press_window_s=0.35)
+        self.assertFalse(button.update(True, 0.01).press_edge)
+        self.assertTrue(button.update(True, 0.12).press_edge)
+        self.assertTrue(button.update(False, 0.13).press_edge is False)
+        self.assertFalse(button.update(False, 0.24).press_edge)
+        self.assertFalse(button.update(True, 0.25).press_edge)
+        double = button.update(True, 0.36)
+        self.assertTrue(double.double_press)
+
+        single = ButtonPressClassifier(False, 1.0, double_press_window_s=0.35)
+        single.update(True, 1.01)
+        single.update(True, 1.12)
+        self.assertTrue(single.update(False, 1.48).single_press)
+
+    def test_double_press_straight_drive_output(self) -> None:
+        output = straight_drive_output(RobotConfig())
+        self.assertEqual(output.drive_command, RobotConfig().cruise_drive_command)
+        self.assertEqual(output.steering_wheel_deg, 0.0)
 
     def test_linux_key_events_track_alt_and_arrow(self) -> None:
         keyboard = LinuxKeyboardInput([])
