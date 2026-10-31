@@ -60,6 +60,7 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(args.right_line_pin, 22)
         self.assertEqual(args.button_pin, 24)
         self.assertEqual(args.drive_motor_2_direction, -1)
+        self.assertEqual(args.steering_direction, -1)
         self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
 
     def test_course_library_is_found_from_repository_layout(self) -> None:

@@ -228,7 +228,7 @@ class HardwareConfig:
     inches_per_motor_rotation: float
     drive_motor_1_direction: int = 1
     drive_motor_2_direction: int = 1
-    steering_direction: int = 1
+    steering_direction: int = -1
     yaw_direction: int = 1
     pitch_direction: int = 1
     roll_direction: int = 1
@@ -1089,8 +1089,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--steering-direction",
         type=require_direction,
-        default=1,
-        help="use -1 if positive steering encoder motion turns the wheels left",
+        default=-1,
+        help="motor/encoder direction; defaults to -1 for the current linkage",
     )
     parser.add_argument(
         "--yaw-direction",
