@@ -28,6 +28,11 @@ Grove IMU. It deliberately does not use the magnetometer.
 Keep the robot still and level during the two-second IMU calibration every time
 the program starts.
 
+All drive commands are currently reduced to 50% of their original values to
+make line-tracking oscillation easier to observe and diagnose. This includes
+cruise, curves, gaps, searching, obstacle traversal, reverse recovery, and
+manual Up/Down control. Steering range and response tuning are unchanged.
+
 ## Measure encoder distance
 
 The gearing cannot be inferred from wheel diameter because both motors, both

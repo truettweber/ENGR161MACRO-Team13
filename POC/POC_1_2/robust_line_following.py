@@ -166,15 +166,15 @@ class RobotConfig:
     imu_calibration_s: float = 2.0
 
     # Regulated motor commands, on the Build HAT -100..100 scale
-    cruise_drive_command: float = 30.0
-    curve_drive_command: float = 22.0
-    gap_drive_command: float = 22.0
-    search_drive_command: float = 16.0
-    obstacle_drive_command: float = 20.0
-    reverse_drive_command: float = 15.0
+    cruise_drive_command: float = 15.0
+    curve_drive_command: float = 11.0
+    gap_drive_command: float = 11.0
+    search_drive_command: float = 8.0
+    obstacle_drive_command: float = 10.0
+    reverse_drive_command: float = 7.5
 
     # Manual arrow-key control
-    manual_drive_command: float = 25.0
+    manual_drive_command: float = 12.5
     manual_steering_fraction: float = 0.75
 
     # Steering motor position loop

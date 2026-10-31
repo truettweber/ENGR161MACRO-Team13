@@ -80,6 +80,16 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(args.steering_direction, -1)
         self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
 
+    def test_drive_commands_are_reduced_by_half(self) -> None:
+        config = RobotConfig()
+        self.assertEqual(config.cruise_drive_command, 15.0)
+        self.assertEqual(config.curve_drive_command, 11.0)
+        self.assertEqual(config.gap_drive_command, 11.0)
+        self.assertEqual(config.search_drive_command, 8.0)
+        self.assertEqual(config.obstacle_drive_command, 10.0)
+        self.assertEqual(config.reverse_drive_command, 7.5)
+        self.assertEqual(config.manual_drive_command, 12.5)
+
     def test_button_emits_one_toggle_per_stable_press(self) -> None:
         button = DebouncedButtonToggle(False, 0.0)
         self.assertFalse(button.update(True, 0.01))
