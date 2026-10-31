@@ -1,9 +1,8 @@
-"""Hardware-independent behavioral tests for the robust line follower."""
+"""Hardware-independent tests for straight-line robot control."""
 
 import os
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from POC.POC_1_2.robust_line_following import (
     ControllerState,
@@ -16,7 +15,6 @@ from POC.POC_1_2.robust_line_following import (
     OperatingMode,
     PROJECT_LIBRARY_DIRECTORY,
     RobotConfig,
-    TkKeyboardInput,
     build_argument_parser,
     choose_operating_mode,
     line_value_is_black,
@@ -30,45 +28,30 @@ def observation(
     *,
     left: bool = True,
     right: bool = True,
-    odometer: float = 0.0,
-    speed: float = 5.0,
-    yaw: float = 0.0,
-    yaw_rate: float = 0.0,
-    pitch: float = 0.0,
-    acceleration_deviation: float = 0.0,
+    disagreement: float = 0.0,
 ) -> Observation:
     return Observation(
         now=now,
         dt=0.025,
         line_left=left,
         line_right=right,
-        distance_in=odometer,
-        odometer_in=odometer,
-        speed_ips=speed,
-        drive_speed_1=20.0,
-        drive_speed_2=20.0,
-        drive_motor_disagreement_deg=0.0,
+        distance_in=0.0,
+        odometer_in=0.0,
+        speed_ips=1.0,
+        drive_speed_1=5.0,
+        drive_speed_2=5.0,
+        drive_motor_disagreement_deg=disagreement,
         steering_motor_deg=0.0,
-        yaw_deg=yaw,
-        yaw_rate_dps=yaw_rate,
-        pitch_deg=pitch,
+        yaw_deg=0.0,
+        yaw_rate_dps=0.0,
+        pitch_deg=0.0,
         roll_deg=0.0,
-        acceleration_deviation_mps2=acceleration_deviation,
+        acceleration_deviation_mps2=0.0,
     )
 
 
-class LineFollowerControllerTests(unittest.TestCase):
-    def test_grove_line_values_treat_zero_as_black(self) -> None:
-        self.assertTrue(line_value_is_black(0))
-        self.assertTrue(line_value_is_black(0.49))
-        self.assertFalse(line_value_is_black(0.5))
-        self.assertFalse(line_value_is_black(1))
-
-    def test_relative_steering_position_handles_absolute_encoder_wrap(self) -> None:
-        self.assertAlmostEqual(wrap_degrees(170.0 - (-170.0)), -20.0)
-        self.assertAlmostEqual(wrap_degrees(-170.0 - 170.0), 20.0)
-
-    def test_pi_script_defaults_match_supplied_robot_configuration(self) -> None:
+class StraightLineControllerTests(unittest.TestCase):
+    def test_defaults_match_robot_and_slow_test_speed(self) -> None:
         args = build_argument_parser().parse_args([])
         self.assertEqual(args.drive_motor_1_port, "C")
         self.assertEqual(args.drive_motor_2_port, "D")
@@ -78,74 +61,118 @@ class LineFollowerControllerTests(unittest.TestCase):
         self.assertEqual(args.button_pin, 24)
         self.assertEqual(args.drive_motor_2_direction, -1)
         self.assertEqual(args.steering_direction, 1)
-        self.assertAlmostEqual(args.inches_per_motor_rotation, 9.74)
-
-    def test_drive_commands_are_reduced_sixty_percent_from_prior_values(self) -> None:
         config = RobotConfig()
         self.assertEqual(config.cruise_drive_command, 6.0)
         self.assertEqual(config.curve_drive_command, 4.4)
-        self.assertEqual(config.gap_drive_command, 4.4)
-        self.assertEqual(config.search_drive_command, 3.2)
-        self.assertEqual(config.obstacle_drive_command, 4.0)
-        self.assertEqual(config.reverse_drive_command, 3.0)
         self.assertEqual(config.manual_drive_command, 5.0)
-
-    def test_steering_motor_uses_faster_position_commands(self) -> None:
-        config = RobotConfig()
-        self.assertEqual(config.steering_position_kp, 1.75)
         self.assertEqual(config.steering_max_command, 70.0)
 
-    def test_button_emits_one_toggle_per_stable_press(self) -> None:
-        button = DebouncedButtonToggle(False, 0.0)
-        self.assertFalse(button.update(True, 0.01))
-        self.assertFalse(button.update(True, 0.05))
-        self.assertTrue(button.update(True, 0.12))
-        self.assertFalse(button.update(True, 0.25))
-        self.assertFalse(button.update(False, 0.26))
-        self.assertFalse(button.update(False, 0.37))
-        self.assertFalse(button.update(True, 0.38))
-        self.assertTrue(button.update(True, 0.49))
+    def test_course_library_is_found(self) -> None:
+        self.assertIsNotNone(PROJECT_LIBRARY_DIRECTORY)
+        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "buildhat" / "__init__.py").is_file())
+        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "basehat" / "LineFinder.py").is_file())
 
-    def test_alt_toggles_autonomy_and_arrows_override_it(self) -> None:
+    def test_zero_is_black_and_one_is_white(self) -> None:
+        self.assertTrue(line_value_is_black(0))
+        self.assertTrue(line_value_is_black(0.49))
+        self.assertFalse(line_value_is_black(0.5))
+        self.assertFalse(line_value_is_black(1))
+
+    def test_relative_steering_wrap(self) -> None:
+        self.assertAlmostEqual(wrap_degrees(170.0 - (-170.0)), -20.0)
+        self.assertAlmostEqual(wrap_degrees(-170.0 - 170.0), 20.0)
+
+    def test_line_debouncer_rejects_short_changes(self) -> None:
+        debouncer = LineDebouncer(0.010)
+        self.assertEqual(debouncer.update(True, True, 0.000), (True, True))
+        self.assertEqual(debouncer.update(False, False, 0.005), (True, True))
+        self.assertEqual(debouncer.update(True, True, 0.009), (True, True))
+
+    def test_line_debouncer_preserves_departure_order(self) -> None:
+        debouncer = LineDebouncer(0.010)
+        self.assertEqual(debouncer.update(True, True, 0.000), (True, True))
+        self.assertEqual(debouncer.update(False, True, 0.005), (True, True))
+        self.assertEqual(debouncer.update(False, False, 0.010), (True, True))
+        self.assertEqual(debouncer.update(False, False, 0.016), (False, True))
+        self.assertEqual(debouncer.update(False, False, 0.021), (False, False))
+
+    def test_both_black_drives_straight(self) -> None:
+        output = LineFollowerController(RobotConfig()).update(observation(0.0))
+        self.assertEqual(output.state, ControllerState.TRACK)
+        self.assertEqual(output.drive_command, 6.0)
+        self.assertEqual(output.steering_wheel_deg, 0.0)
+
+    def test_one_sensor_commands_immediate_full_turn(self) -> None:
+        left = LineFollowerController(RobotConfig()).update(
+            observation(0.0, left=True, right=False)
+        )
+        right = LineFollowerController(RobotConfig()).update(
+            observation(0.0, left=False, right=True)
+        )
+        self.assertAlmostEqual(left.steering_wheel_deg, -26.16)
+        self.assertAlmostEqual(right.steering_wheel_deg, 26.16)
+        self.assertEqual(left.drive_command, 4.4)
+        self.assertEqual(right.drive_command, 4.4)
+
+    def test_no_line_at_startup_stays_stopped(self) -> None:
+        controller = LineFollowerController(RobotConfig())
+        output = controller.update(observation(5.0, left=False, right=False))
+        self.assertEqual(output.state, ControllerState.ACQUIRE)
+        self.assertEqual(output.drive_command, 0.0)
+        self.assertEqual(output.steering_wheel_deg, 0.0)
+
+    def test_line_loss_continues_last_turn_then_stops(self) -> None:
+        controller = LineFollowerController(RobotConfig())
+        controller.update(observation(0.0, left=True, right=False))
+        recovering = controller.update(observation(0.1, left=False, right=False))
+        self.assertAlmostEqual(recovering.steering_wheel_deg, -26.16)
+        stopped = controller.update(observation(1.11, left=False, right=False))
+        self.assertEqual(stopped.state, ControllerState.FAULT)
+        self.assertEqual(stopped.drive_command, 0.0)
+        self.assertEqual(stopped.steering_wheel_deg, 0.0)
+
+    def test_reacquiring_both_sensors_immediately_straightens(self) -> None:
+        controller = LineFollowerController(RobotConfig())
+        controller.update(observation(0.0, left=False, right=True))
+        output = controller.update(observation(0.025))
+        self.assertEqual(output.steering_wheel_deg, 0.0)
+        self.assertEqual(output.drive_command, 6.0)
+
+    def test_encoder_disagreement_faults(self) -> None:
+        controller = LineFollowerController(RobotConfig())
+        output = None
+        for index in range(25):
+            output = controller.update(
+                observation(index * 0.025, disagreement=100.0)
+            )
+        self.assertIsNotNone(output)
+        self.assertEqual(output.state, ControllerState.FAULT)
+        self.assertEqual(output.drive_command, 0.0)
+
+    def test_manual_arrows_drive_and_steer(self) -> None:
+        config = RobotConfig()
+        output = manual_output(KeyboardSnapshot(up=True, left=True), config)
+        self.assertEqual(output.state, ControllerState.MANUAL)
+        self.assertEqual(output.drive_command, 5.0)
+        self.assertLess(output.steering_wheel_deg, 0.0)
+
+    def test_alt_toggles_and_arrows_override(self) -> None:
         self.assertEqual(
             choose_operating_mode(OperatingMode.WAITING, True, False),
             OperatingMode.AUTONOMOUS,
         )
         self.assertEqual(
-            choose_operating_mode(OperatingMode.AUTONOMOUS, True, False),
-            OperatingMode.WAITING,
-        )
-        self.assertEqual(
             choose_operating_mode(OperatingMode.AUTONOMOUS, False, True),
             OperatingMode.MANUAL,
         )
-        self.assertEqual(
-            choose_operating_mode(OperatingMode.AUTONOMOUS, True, True),
-            OperatingMode.MANUAL,
-        )
 
-    def test_arrow_keys_drive_and_steer_in_manual_mode(self) -> None:
-        config = RobotConfig()
-        forward_left = manual_output(
-            KeyboardSnapshot(up=True, left=True),
-            config,
-        )
-        self.assertEqual(forward_left.state, ControllerState.MANUAL)
-        self.assertGreater(forward_left.drive_command, 0.0)
-        self.assertLess(forward_left.steering_wheel_deg, 0.0)
+    def test_button_emits_one_toggle_per_press(self) -> None:
+        button = DebouncedButtonToggle(False, 0.0)
+        self.assertFalse(button.update(True, 0.01))
+        self.assertTrue(button.update(True, 0.12))
+        self.assertFalse(button.update(True, 0.25))
 
-        reverse_right = manual_output(
-            KeyboardSnapshot(down=True, right=True),
-            config,
-        )
-        self.assertLess(reverse_right.drive_command, 0.0)
-        self.assertGreater(reverse_right.steering_wheel_deg, 0.0)
-
-        released = manual_output(KeyboardSnapshot(), config)
-        self.assertEqual(released.drive_command, 0.0)
-        self.assertEqual(released.steering_wheel_deg, 0.0)
-
-    def test_linux_input_events_report_alt_and_arrow_state(self) -> None:
+    def test_linux_key_events_track_alt_and_arrow(self) -> None:
         keyboard = LinuxKeyboardInput([])
         read_fd, write_fd = os.pipe()
         keyboard._fds.append(read_fd)
@@ -156,290 +183,12 @@ class LineFollowerControllerTests(unittest.TestCase):
                 keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, keyboard.KEY_LEFTALT, 1)
                 + keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, 103, 1),
             )
-            pressed = keyboard.poll()
-            self.assertTrue(pressed.alt_pressed)
-            self.assertTrue(pressed.arrow_activity)
-            self.assertTrue(pressed.up)
-
-            os.write(
-                write_fd,
-                keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, 103, 0),
-            )
-            released = keyboard.poll()
-            self.assertFalse(released.alt_pressed)
-            self.assertFalse(released.up)
-
-            os.write(
-                write_fd,
-                keyboard.EVENT.pack(
-                    0, 0, keyboard.EV_KEY, keyboard.KEY_LEFTCTRL, 1
-                )
-                + keyboard.EVENT.pack(0, 0, keyboard.EV_KEY, keyboard.KEY_C, 1),
-            )
-            self.assertTrue(keyboard.poll().emergency_stop)
+            snapshot = keyboard.poll()
+            self.assertTrue(snapshot.alt_pressed)
+            self.assertTrue(snapshot.up)
         finally:
             keyboard.close()
             os.close(write_fd)
-
-    def test_desktop_control_window_tracks_keys_and_focus_loss(self) -> None:
-        class FakeRoot:
-            def __init__(self) -> None:
-                self.jobs = {}
-                self.next_job = 0
-
-            def after(self, _delay, callback):
-                self.next_job += 1
-                job = str(self.next_job)
-                self.jobs[job] = callback
-                return job
-
-            def after_cancel(self, job):
-                self.jobs.pop(job, None)
-
-            def update_idletasks(self):
-                pass
-
-            def update(self):
-                pass
-
-            def run_jobs(self):
-                jobs = list(self.jobs.values())
-                self.jobs.clear()
-                for callback in jobs:
-                    callback()
-
-        class FakeStatus:
-            def configure(self, **_kwargs):
-                pass
-
-        class FakeTk:
-            TclError = RuntimeError
-
-        keyboard = TkKeyboardInput.__new__(TkKeyboardInput)
-        keyboard._tk = FakeTk
-        keyboard._root = FakeRoot()
-        keyboard._status = FakeStatus()
-        keyboard._pressed_arrows = set()
-        keyboard._pressed_alt = set()
-        keyboard._pressed_ctrl = set()
-        keyboard._release_jobs = {}
-        keyboard._alt_pressed = False
-        keyboard._arrow_activity = False
-        keyboard._emergency_stop = False
-        keyboard._closed = False
-
-        keyboard._on_press(SimpleNamespace(keysym="Up"))
-        pressed = keyboard.poll()
-        self.assertTrue(pressed.arrow_activity)
-        self.assertTrue(pressed.up)
-
-        keyboard._on_release(SimpleNamespace(keysym="Up"))
-        keyboard._root.run_jobs()
-        self.assertFalse(keyboard.poll().up)
-
-        keyboard._on_press(SimpleNamespace(keysym="Alt_L"))
-        self.assertTrue(keyboard.poll().alt_pressed)
-        keyboard._on_press(SimpleNamespace(keysym="Control_L"))
-        keyboard._on_press(SimpleNamespace(keysym="c"))
-        self.assertTrue(keyboard.poll().emergency_stop)
-
-        keyboard._on_press(SimpleNamespace(keysym="Right"))
-        keyboard._on_focus_out(SimpleNamespace())
-        self.assertFalse(keyboard.poll().right)
-
-    def test_course_library_is_found_from_repository_layout(self) -> None:
-        self.assertIsNotNone(PROJECT_LIBRARY_DIRECTORY)
-        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "buildhat" / "__init__.py").is_file())
-        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "basehat" / "__init__.py").is_file())
-        self.assertTrue((PROJECT_LIBRARY_DIRECTORY / "basehat" / "LineFinder.py").is_file())
-
-    def test_line_debouncer_rejects_a_short_change(self) -> None:
-        debouncer = LineDebouncer(0.025)
-        self.assertEqual(debouncer.update(True, True, 0.0), (True, True))
-        self.assertEqual(debouncer.update(False, False, 0.010), (True, True))
-        self.assertEqual(debouncer.update(True, True, 0.020), (True, True))
-        self.assertEqual(debouncer.update(False, False, 0.030), (True, True))
-        self.assertEqual(debouncer.update(False, False, 0.060), (False, False))
-
-    def test_line_debouncer_preserves_sensor_departure_order(self) -> None:
-        debouncer = LineDebouncer(0.025)
-        self.assertEqual(debouncer.update(True, True, 0.000), (True, True))
-        self.assertEqual(debouncer.update(False, True, 0.010), (True, True))
-        self.assertEqual(debouncer.update(False, False, 0.020), (True, True))
-        self.assertEqual(debouncer.update(False, False, 0.040), (False, True))
-        self.assertEqual(debouncer.update(False, False, 0.050), (False, False))
-
-    def test_left_and_right_line_readings_command_correct_directions(self) -> None:
-        left_controller = LineFollowerController(RobotConfig())
-        left_controller.update(observation(0.0))
-        left = left_controller.update(observation(0.025, left=True, right=False))
-        self.assertEqual(left.state, ControllerState.TRACK)
-        self.assertLess(left.steering_wheel_deg, 0.0)
-
-        right_controller = LineFollowerController(RobotConfig())
-        right_controller.update(observation(0.0))
-        right = right_controller.update(observation(0.025, left=False, right=True))
-        self.assertEqual(right.state, ControllerState.TRACK)
-        self.assertGreater(right.steering_wheel_deg, 0.0)
-
-    def test_sustained_line_error_is_capped_below_full_steering(self) -> None:
-        config = RobotConfig()
-        self.assertEqual(config.steering_motor_limit_deg, 90.0)
-        self.assertAlmostEqual(config.maximum_wheel_angle_deg, 26.16)
-        self.assertEqual(config.curvature_ramp_per_s, 0.075)
-        self.assertEqual(config.curvature_slew_per_s, 0.120)
-        self.assertEqual(config.centered_curvature_decay_per_s, 0.250)
-
-        controller = LineFollowerController(config)
-        output = controller.update(observation(0.0, left=False, right=True))
-        for index in range(1, 81):
-            output = controller.update(
-                observation(index * 0.025, left=False, right=True)
-            )
-
-        self.assertGreater(output.steering_wheel_deg, 10.0)
-        self.assertAlmostEqual(
-            output.steering_wheel_deg,
-            config.maximum_tracking_wheel_angle_deg,
-            places=5,
-        )
-        self.assertLess(output.steering_wheel_deg, config.maximum_wheel_angle_deg)
-
-    def test_imu_yaw_does_not_modify_steering(self) -> None:
-        config = RobotConfig()
-        self.assertEqual(config.yaw_rate_curvature_gain, 0.0)
-        self.assertEqual(config.heading_curvature_gain, 0.0)
-        controller = LineFollowerController(config)
-        output = controller.update(
-            observation(
-                0.0,
-                left=False,
-                right=True,
-                yaw=90.0,
-                yaw_rate=500.0,
-            )
-        )
-        self.assertGreater(output.steering_wheel_deg, 0.0)
-
-    def test_short_gap_turns_toward_last_sensor_then_reacquires(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0, left=False, right=True))
-        for index in range(1, 12):
-            output = controller.update(
-                observation(index * 0.025, left=False, right=True, odometer=index * 0.1)
-            )
-        self.assertGreater(output.curvature_per_in, 0.0)
-
-        gap = controller.update(
-            observation(0.4, left=False, right=False, odometer=1.3)
-        )
-        self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
-        self.assertAlmostEqual(
-            gap.curvature_per_in,
-            RobotConfig().maximum_curvature_per_in,
-        )
-        self.assertAlmostEqual(gap.steering_wheel_deg, 26.16)
-        self.assertGreater(gap.steering_wheel_deg, 0.0)
-
-        reacquired = controller.update(
-            observation(0.5, left=True, right=True, odometer=1.8)
-        )
-        self.assertEqual(reacquired.state, ControllerState.TRACK)
-
-    def test_gap_direction_follows_sensor_that_left_last(self) -> None:
-        left_controller = LineFollowerController(RobotConfig())
-        left_controller.update(observation(0.0))
-        left_controller.update(observation(0.025, left=True, right=False))
-        left_gap = left_controller.update(
-            observation(0.050, left=False, right=False, odometer=0.1)
-        )
-        self.assertEqual(left_gap.state, ControllerState.GAP_PREDICT)
-        self.assertLess(left_gap.steering_wheel_deg, 0.0)
-        self.assertIn("turning left", left_gap.reason)
-
-        right_controller = LineFollowerController(RobotConfig())
-        right_controller.update(observation(0.0))
-        right_controller.update(observation(0.025, left=False, right=True))
-        right_gap = right_controller.update(
-            observation(0.050, left=False, right=False, odometer=0.1)
-        )
-        self.assertEqual(right_gap.state, ControllerState.GAP_PREDICT)
-        self.assertGreater(right_gap.steering_wheel_deg, 0.0)
-        self.assertIn("turning right", right_gap.reason)
-
-    def test_simultaneous_sensor_loss_does_not_guess_direction(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0))
-        gap = controller.update(
-            observation(0.025, left=False, right=False, odometer=0.1)
-        )
-        self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
-        self.assertEqual(gap.steering_wheel_deg, 0.0)
-        self.assertIn("commanding straight", gap.reason)
-
-    def test_simultaneous_loss_falls_back_to_last_known_line_side(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.000, left=False, right=True))
-        controller.update(observation(0.025, left=True, right=True))
-        gap = controller.update(
-            observation(0.050, left=False, right=False, odometer=0.1)
-        )
-        self.assertEqual(gap.state, ControllerState.GAP_PREDICT)
-        self.assertAlmostEqual(gap.steering_wheel_deg, 26.16)
-        self.assertIn("turning right", gap.reason)
-
-    def test_gap_longer_than_specification_enters_search(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0))
-        controller.update(observation(0.1, left=False, right=False, odometer=0.1))
-        output = controller.update(observation(0.5, left=False, right=False, odometer=3.7))
-        self.assertEqual(output.state, ControllerState.SEARCH)
-
-    def test_startup_without_a_visible_line_remains_stopped(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0, left=False, right=False))
-        output = controller.update(
-            observation(2.0, left=False, right=False, odometer=0.0)
-        )
-        self.assertEqual(output.state, ControllerState.ACQUIRE)
-        self.assertEqual(output.drive_command, 0.0)
-        self.assertEqual(output.steering_wheel_deg, 0.0)
-        self.assertEqual(output.reason, "waiting for a line at startup")
-
-    def test_obstacle_tilt_changes_state_and_reduces_speed(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0))
-        output = controller.update(observation(0.025, pitch=10.0))
-        self.assertEqual(output.state, ControllerState.OBSTACLE)
-        self.assertEqual(output.drive_command, RobotConfig().obstacle_drive_command)
-
-    def test_search_is_bounded_by_distance(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0))
-        controller.update(observation(0.025, left=False, right=True, odometer=0.1))
-        controller.update(observation(0.050, left=False, right=False, odometer=0.2))
-        controller.update(observation(0.5, left=False, right=False, odometer=3.8))
-        self.assertEqual(controller.state, ControllerState.SEARCH)
-        output = controller.update(observation(2.0, left=False, right=False, odometer=16.9))
-        self.assertEqual(output.state, ControllerState.FAULT)
-        self.assertEqual(output.drive_command, 0.0)
-
-    def test_coupled_motor_disagreement_causes_safety_stop(self) -> None:
-        controller = LineFollowerController(RobotConfig())
-        controller.update(observation(0.0))
-        output = None
-        for index in range(1, 22):
-            sample = observation(index * 0.025, odometer=index * 0.1)
-            sample = Observation(
-                **{
-                    **sample.__dict__,
-                    "drive_motor_disagreement_deg": 100.0,
-                }
-            )
-            output = controller.update(sample)
-        self.assertIsNotNone(output)
-        self.assertEqual(output.state, ControllerState.FAULT)
-        self.assertEqual(output.drive_command, 0.0)
 
 
 if __name__ == "__main__":

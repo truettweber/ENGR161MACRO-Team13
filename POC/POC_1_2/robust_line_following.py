@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Robust line following for the ENGR 161 MACRO robot.
+"""Simple straight-line following for the ENGR 161 MACRO robot.
 
 AI-assisted development: OpenAI Codex, 2026-10-30.
 This program was developed from the team's stated geometry and the project
@@ -11,17 +11,14 @@ Hardware assumptions
 * One SPIKE Small Angular Motor drives a rack-and-pinion steering system.
 * The steering position at startup is treated as straight. +/-90 motor degrees
   from that center maps to +/-26.16 wheel degrees and is the commanded limit.
-* Two Grove line finders are mounted 0.375 inch either side of the centerline
-  and 1.75 inches ahead of the front axle.
 * A Grove button or keyboard Alt key toggles autonomous operation after
-  calibration. Arrow keys immediately override autonomy for manual driving.
-* The IMU X axis points forward, Y points down, and Z is lateral. Therefore
-  yaw rate is read from the Y gyro axis. Magnetometer readings are not used.
+  motor initialization. Arrow keys immediately override autonomy for manual
+  driving.
 
-The controller follows solid lines, predicts through gaps, performs a bounded
-search after a genuine loss, slows for curves, detects obstacles from the IMU
-and encoder response, and performs a short reverse retry after a stall. Ctrl+C
-always exits and stops every motor through the main function's finally block.
+The autonomous controller is deliberately limited to a four-state bang-bang
+response for one straight, unbroken black line. The IMU is not initialized or
+read. Ctrl+C always exits and stops every motor through the main function's
+finally block.
 """
 
 from __future__ import annotations
@@ -80,7 +77,6 @@ def is_project_library(directory: Path) -> bool:
         (directory / "buildhat" / "__init__.py").is_file()
         and (directory / "basehat" / "__init__.py").is_file()
         and (directory / "basehat" / "LineFinder.py").is_file()
-        and (directory / "basehat" / "IMUSensor.py").is_file()
     )
 
 
@@ -93,7 +89,7 @@ def configure_project_library(explicit_directory: Optional[Path] = None) -> Opti
             raise ValueError(
                 f"{candidate} is not the project lib directory; expected "
                 "buildhat/__init__.py, basehat/__init__.py, "
-                "basehat/LineFinder.py, and basehat/IMUSensor.py inside it"
+                "and basehat/LineFinder.py inside it"
             )
         selected = candidate
     else:
@@ -144,10 +140,6 @@ class ControllerState(Enum):
     MANUAL = "manual"
     ACQUIRE = "acquire"
     TRACK = "track"
-    GAP_PREDICT = "gap_predict"
-    SEARCH = "search"
-    OBSTACLE = "obstacle"
-    RECOVER_REVERSE = "recover_reverse"
     FAULT = "fault"
 
 
@@ -155,27 +147,23 @@ class ControllerState(Enum):
 class RobotConfig:
     # Robot geometry
     wheelbase_in: float = 5.5
-    sensor_ahead_of_front_axle_in: float = 1.75
-    sensor_half_spacing_in: float = 0.375
     steering_motor_limit_deg: float = 90.0
     wheel_deg_at_90_motor_deg: float = 26.16
 
     # Loop and sensor filtering
     loop_hz: float = 40.0
-    line_debounce_s: float = 0.025
-    imu_calibration_s: float = 2.0
+    line_debounce_s: float = 0.010
 
     # Regulated motor commands, on the Build HAT -100..100 scale
     cruise_drive_command: float = 6.0
     curve_drive_command: float = 4.4
-    gap_drive_command: float = 4.4
-    search_drive_command: float = 3.2
-    obstacle_drive_command: float = 4.0
-    reverse_drive_command: float = 3.0
 
     # Manual arrow-key control
     manual_drive_command: float = 5.0
     manual_steering_fraction: float = 0.75
+
+    # Straight-line bang-bang recovery
+    line_loss_stop_s: float = 1.0
 
     # Steering motor position loop
     steering_position_kp: float = 1.75
@@ -183,35 +171,6 @@ class RobotConfig:
     steering_max_command: float = 70.0
     steering_deadband_motor_deg: float = 1.0
     steering_emergency_limit_deg: float = 90.0
-
-    # Line and yaw control
-    curvature_ramp_per_s: float = 0.075
-    centered_curvature_decay_per_s: float = 0.250
-    curvature_slew_per_s: float = 0.120
-    maximum_tracking_curvature_fraction: float = 0.60
-    yaw_rate_curvature_gain: float = 0.0
-    heading_curvature_gain: float = 0.0
-
-    # Gap and search bounds from the project track specification
-    maximum_predicted_gap_in: float = 3.5
-    gap_recovery_curvature_fraction: float = 1.0
-    search_sweep_s: float = 1.0
-    maximum_search_s: float = 8.0
-    maximum_search_distance_in: float = 12.0
-    search_curvature_fraction: float = 0.90
-
-    # Obstacle and stall detection
-    obstacle_tilt_trigger_deg: float = 8.0
-    obstacle_tilt_exit_deg: float = 4.0
-    impact_acceleration_trigger_mps2: float = 4.0
-    impact_acceleration_exit_mps2: float = 2.0
-    obstacle_settle_s: float = 0.50
-    obstacle_timeout_s: float = 5.0
-    stall_speed_ips: float = 0.25
-    stall_trigger_s: float = 0.75
-    maximum_obstacle_retries: int = 2
-    reverse_recovery_distance_in: float = 0.75
-    reverse_recovery_timeout_s: float = 0.80
 
     # Coupled-motor diagnostic
     motor_disagreement_limit_deg: float = 90.0
@@ -225,29 +184,6 @@ class RobotConfig:
             / 90.0
         )
 
-    @property
-    def maximum_curvature_per_in(self) -> float:
-        return math.tan(math.radians(self.maximum_wheel_angle_deg)) / self.wheelbase_in
-
-    @property
-    def maximum_tracking_curvature_per_in(self) -> float:
-        return (
-            self.maximum_curvature_per_in
-            * self.maximum_tracking_curvature_fraction
-        )
-
-    @property
-    def maximum_tracking_wheel_angle_deg(self) -> float:
-        return math.degrees(
-            math.atan(self.wheelbase_in * self.maximum_tracking_curvature_per_in)
-        )
-
-    @property
-    def initial_line_curvature_per_in(self) -> float:
-        lookahead = self.wheelbase_in + self.sensor_ahead_of_front_axle_in
-        return 2.0 * self.sensor_half_spacing_in / (lookahead * lookahead)
-
-
 @dataclass(frozen=True)
 class HardwareConfig:
     drive_motor_1_port: str
@@ -260,9 +196,6 @@ class HardwareConfig:
     drive_motor_1_direction: int = 1
     drive_motor_2_direction: int = 1
     steering_direction: int = 1
-    yaw_direction: int = 1
-    pitch_direction: int = 1
-    roll_direction: int = 1
 
     def validate(self) -> None:
         ports = (
@@ -284,9 +217,6 @@ class HardwareConfig:
             self.drive_motor_1_direction,
             self.drive_motor_2_direction,
             self.steering_direction,
-            self.yaw_direction,
-            self.pitch_direction,
-            self.roll_direction,
         ):
             if direction not in (-1, 1):
                 raise ValueError("all direction values must be -1 or 1")
@@ -820,409 +750,117 @@ class LineDebouncer:
 
 
 class LineFollowerController:
-    """Hardware-independent state machine and line-following controller."""
+    """Simple bang-bang controller for one straight, unbroken black line."""
 
     def __init__(self, config: RobotConfig):
         self.config = config
         self.state = ControllerState.ACQUIRE
-        self.state_started_at: Optional[float] = None
-        self.state_started_odometer = 0.0
-        self.reason = "waiting for line"
-
-        self.curvature_command = 0.0
-        self.measured_curvature = 0.0
+        self.reason = "waiting for a line at startup"
         self.last_line_sign = 0
-        self.previous_line_sign = 0
-        self.one_side_persistence_s = 0.0
-        self.line_confidence = 0.0
-        self.previous_line_pair = (False, False)
-        self.gap_recovery_sign = 0
-
-        self.last_odometer_in = 0.0
-
-        self.obstacle_curvature = 0.0
-        self.obstacle_heading_reference_deg = 0.0
-        self.obstacle_settle_s = 0.0
-        self.obstacle_retries = 0
-
-        self.stall_s = 0.0
+        self.line_lost_since: Optional[float] = None
         self.disagreement_s = 0.0
         self.last_drive_command = 0.0
 
-    def _transition(self, state: ControllerState, obs: Observation, reason: str) -> None:
-        self.state = state
-        self.state_started_at = obs.now
-        self.state_started_odometer = obs.odometer_in
-        self.reason = reason
-
-    def _state_elapsed(self, obs: Observation) -> float:
-        if self.state_started_at is None:
-            return 0.0
-        return max(0.0, obs.now - self.state_started_at)
-
-    def _enter_gap(self, obs: Observation, reason: str) -> None:
-        if self.gap_recovery_sign < 0:
-            reason += "; turning left toward the last sensor on the line"
-        elif self.gap_recovery_sign > 0:
-            reason += "; turning right toward the last sensor on the line"
-        else:
-            reason += "; no departure direction detected, commanding straight"
-        self._transition(ControllerState.GAP_PREDICT, obs, reason)
-
-    def _record_line_departure(self, obs: Observation) -> None:
-        current = (obs.line_left, obs.line_right)
-        if current == (False, False) and current != self.previous_line_pair:
-            if self.previous_line_pair == (True, False):
-                self.gap_recovery_sign = -1
-                self.last_line_sign = -1
-            elif self.previous_line_pair == (False, True):
-                self.gap_recovery_sign = 1
-                self.last_line_sign = 1
-            else:
-                # The control loop may miss the short one-sensor interval. Use
-                # the most recently observed side instead of assuming straight.
-                self.gap_recovery_sign = self.last_line_sign
-        self.previous_line_pair = current
-
-    def _line_sign(self, obs: Observation) -> int:
-        # Positive steering is a right turn. A left-only detection means the
-        # line lies left of the robot center and therefore requests a left turn.
+    @staticmethod
+    def _line_sign(obs: Observation) -> int:
         if obs.line_left and not obs.line_right:
             return -1
         if obs.line_right and not obs.line_left:
             return 1
         return 0
 
-    def _update_diagnostics(self, obs: Observation) -> None:
-        if (
-            abs(self.last_drive_command) >= self.config.search_drive_command
-            and abs(obs.speed_ips) < self.config.stall_speed_ips
-        ):
-            self.stall_s += obs.dt
-        else:
-            self.stall_s = max(0.0, self.stall_s - 2.0 * obs.dt)
-
-        if obs.drive_motor_disagreement_deg > self.config.motor_disagreement_limit_deg:
-            self.disagreement_s += obs.dt
-        else:
-            self.disagreement_s = 0.0
-
-    def _obstacle_detected(self, obs: Observation) -> bool:
-        tilt = max(abs(obs.pitch_deg), abs(obs.roll_deg))
-        return (
-            tilt >= self.config.obstacle_tilt_trigger_deg
-            or obs.acceleration_deviation_mps2 >= self.config.impact_acceleration_trigger_mps2
-            or self.stall_s >= self.config.stall_trigger_s
-        )
-
-    def _curvature_to_wheel_angle(self, curvature: float) -> float:
-        wheel_angle = math.degrees(math.atan(self.config.wheelbase_in * curvature))
-        return clamp(
+    def _output(
+        self,
+        drive: float,
+        wheel_angle: float,
+        confidence: float,
+    ) -> ControlOutput:
+        wheel_angle = clamp(
             wheel_angle,
             -self.config.maximum_wheel_angle_deg,
             self.config.maximum_wheel_angle_deg,
         )
-
-    def _track(self, obs: Observation) -> tuple[float, float]:
-        line_sign = self._line_sign(obs)
-        if line_sign == 0:
-            self.one_side_persistence_s = 0.0
-            self.previous_line_sign = 0
-            desired_curvature = move_toward(
-                self.curvature_command,
-                0.0,
-                self.config.centered_curvature_decay_per_s * obs.dt,
-            )
-        else:
-            self.last_line_sign = line_sign
-            if line_sign == self.previous_line_sign:
-                self.one_side_persistence_s += obs.dt
-            else:
-                self.one_side_persistence_s = 0.0
-            self.previous_line_sign = line_sign
-            magnitude = (
-                self.config.initial_line_curvature_per_in
-                + self.config.curvature_ramp_per_s * self.one_side_persistence_s
-            )
-            desired_curvature = line_sign * min(
-                magnitude, self.config.maximum_tracking_curvature_per_in
-            )
-
-        if abs(obs.speed_ips) >= 0.5:
-            instantaneous = math.radians(obs.yaw_rate_dps) / obs.speed_ips
-            instantaneous = clamp(
-                instantaneous,
-                -self.config.maximum_curvature_per_in,
-                self.config.maximum_curvature_per_in,
-            )
-            self.measured_curvature = 0.85 * self.measured_curvature + 0.15 * instantaneous
-
-        expected_yaw_rate = math.degrees(obs.speed_ips * desired_curvature)
-        desired_curvature += self.config.yaw_rate_curvature_gain * (
-            expected_yaw_rate - obs.yaw_rate_dps
-        )
-        desired_curvature = clamp(
-            desired_curvature,
-            -self.config.maximum_tracking_curvature_per_in,
-            self.config.maximum_tracking_curvature_per_in,
-        )
-        self.curvature_command = move_toward(
-            self.curvature_command,
-            desired_curvature,
-            self.config.curvature_slew_per_s * obs.dt,
-        )
-        self.curvature_command = clamp(
-            self.curvature_command,
-            -self.config.maximum_tracking_curvature_per_in,
-            self.config.maximum_tracking_curvature_per_in,
-        )
-
-        curve_fraction = (
-            abs(self.curvature_command)
-            / self.config.maximum_tracking_curvature_per_in
-        )
-        drive = self.config.cruise_drive_command - curve_fraction * (
-            self.config.cruise_drive_command - self.config.curve_drive_command
-        )
-        self.line_confidence = min(1.0, self.line_confidence + 2.0 * obs.dt)
-        return drive, self.curvature_command
-
-    def _predict_gap(self, obs: Observation) -> tuple[float, float]:
-        traveled = obs.odometer_in - self.state_started_odometer
-        # The last sensor to change from black to white identifies the side
-        # toward which the line departed. Apply an immediate, fixed correction
-        # toward that side while crossing the bounded possible line gap.
-        self.curvature_command = (
-            self.gap_recovery_sign
-            * self.config.maximum_curvature_per_in
-            * self.config.gap_recovery_curvature_fraction
-        )
-        self.line_confidence = clamp(
-            1.0 - traveled / self.config.maximum_predicted_gap_in, 0.0, 1.0
-        )
-        drive = self.config.gap_drive_command * (0.75 + 0.25 * self.line_confidence)
-        return drive, self.curvature_command
-
-    def _search(self, obs: Observation) -> tuple[float, float]:
-        elapsed = self._state_elapsed(obs)
-        phase = int(elapsed / self.config.search_sweep_s)
-        last_direction = self.last_line_sign or 1
-        direction = last_direction * (-1 if phase % 2 else 1)
-        magnitude = self.config.initial_line_curvature_per_in + 0.012 * phase
-        magnitude = min(
-            magnitude,
-            self.config.maximum_curvature_per_in * self.config.search_curvature_fraction,
-        )
-        target = direction * magnitude
-        self.curvature_command = move_toward(
-            self.curvature_command,
-            target,
-            self.config.curvature_slew_per_s * obs.dt,
-        )
-        self.line_confidence = 0.0
-        return self.config.search_drive_command, self.curvature_command
-
-    def update(self, obs: Observation) -> ControlOutput:
-        if self.state_started_at is None:
-            self.state_started_at = obs.now
-            self.state_started_odometer = obs.odometer_in
-            self.last_odometer_in = obs.odometer_in
-
-        self._update_diagnostics(obs)
-        any_line = obs.line_left or obs.line_right
-        self._record_line_departure(obs)
-
-        if self.disagreement_s >= self.config.motor_disagreement_trigger_s:
-            self._transition(
-                ControllerState.FAULT,
-                obs,
-                "coupled drive motor encoders disagree",
-            )
-
-        if (
-            self.state not in {
-                ControllerState.OBSTACLE,
-                ControllerState.RECOVER_REVERSE,
-                ControllerState.FAULT,
-            }
-            and self._obstacle_detected(obs)
-        ):
-            self.obstacle_curvature = self.curvature_command
-            self.obstacle_heading_reference_deg = obs.yaw_deg
-            self.obstacle_settle_s = 0.0
-            self._transition(
-                ControllerState.OBSTACLE,
-                obs,
-                "tilt, impact, or reduced drivetrain progress detected",
-            )
-
-        drive = 0.0
-        curvature = self.curvature_command
-
-        if self.state == ControllerState.ACQUIRE:
-            if any_line:
-                self._transition(ControllerState.TRACK, obs, "line acquired")
-                drive, curvature = self._track(obs)
-            else:
-                # Never guess a search direction before either sensor has seen
-                # the line. The old fallback always searched right, causing a
-                # repeatable right turn when autonomy began off the line.
-                self.reason = "waiting for a line at startup"
-                drive = 0.0
-                curvature = 0.0
-                self.curvature_command = 0.0
-
-        elif self.state == ControllerState.TRACK:
-            if not any_line:
-                self._enter_gap(obs, "line disappeared; predicting across gap")
-                drive, curvature = self._predict_gap(obs)
-            else:
-                drive, curvature = self._track(obs)
-
-        elif self.state == ControllerState.GAP_PREDICT:
-            if any_line:
-                self._transition(ControllerState.TRACK, obs, "line reacquired")
-                drive, curvature = self._track(obs)
-            elif (
-                obs.odometer_in - self.state_started_odometer
-                >= self.config.maximum_predicted_gap_in
-            ):
-                self._transition(
-                    ControllerState.SEARCH,
-                    obs,
-                    "maximum specified line gap exceeded",
-                )
-                drive, curvature = self._search(obs)
-            else:
-                drive, curvature = self._predict_gap(obs)
-
-        elif self.state == ControllerState.SEARCH:
-            elapsed = self._state_elapsed(obs)
-            distance = obs.odometer_in - self.state_started_odometer
-            if any_line:
-                self._transition(ControllerState.TRACK, obs, "line found during search")
-                drive, curvature = self._track(obs)
-            elif (
-                elapsed >= self.config.maximum_search_s
-                or distance >= self.config.maximum_search_distance_in
-            ):
-                self._transition(
-                    ControllerState.FAULT,
-                    obs,
-                    "bounded line search exhausted",
-                )
-            else:
-                drive, curvature = self._search(obs)
-
-        elif self.state == ControllerState.OBSTACLE:
-            delta_distance = max(0.0, obs.odometer_in - self.last_odometer_in)
-            self.obstacle_heading_reference_deg += math.degrees(
-                self.obstacle_curvature * delta_distance
-            )
-            heading_error = wrap_degrees(
-                self.obstacle_heading_reference_deg - obs.yaw_deg
-            )
-            curvature = self.obstacle_curvature + (
-                self.config.heading_curvature_gain * heading_error
-            )
-            curvature = clamp(
-                curvature,
-                -self.config.maximum_curvature_per_in,
-                self.config.maximum_curvature_per_in,
-            )
-            self.curvature_command = move_toward(
-                self.curvature_command,
-                curvature,
-                0.5 * self.config.curvature_slew_per_s * obs.dt,
-            )
-            drive = self.config.obstacle_drive_command
-
-            settled = (
-                max(abs(obs.pitch_deg), abs(obs.roll_deg))
-                <= self.config.obstacle_tilt_exit_deg
-                and obs.acceleration_deviation_mps2
-                <= self.config.impact_acceleration_exit_mps2
-                and abs(obs.speed_ips) >= self.config.stall_speed_ips
-            )
-            self.obstacle_settle_s = (
-                self.obstacle_settle_s + obs.dt if settled else 0.0
-            )
-            elapsed = self._state_elapsed(obs)
-            if self.obstacle_settle_s >= self.config.obstacle_settle_s:
-                self.stall_s = 0.0
-                self.obstacle_retries = 0
-                if any_line:
-                    self._transition(
-                        ControllerState.TRACK, obs, "obstacle cleared; line visible"
-                    )
-                    drive, curvature = self._track(obs)
-                else:
-                    self._enter_gap(obs, "obstacle cleared; predicting line")
-                    drive, curvature = self._predict_gap(obs)
-            elif (
-                self.stall_s >= self.config.stall_trigger_s
-                or elapsed >= self.config.obstacle_timeout_s
-            ):
-                if self.obstacle_retries < self.config.maximum_obstacle_retries:
-                    self.obstacle_retries += 1
-                    self.stall_s = 0.0
-                    self._transition(
-                        ControllerState.RECOVER_REVERSE,
-                        obs,
-                        "obstacle progress stopped; backing up for retry",
-                    )
-                    drive = -self.config.reverse_drive_command
-                else:
-                    self._transition(
-                        ControllerState.FAULT,
-                        obs,
-                        "obstacle remained blocked after retries",
-                    )
-                    drive = 0.0
-
-        elif self.state == ControllerState.RECOVER_REVERSE:
-            drive = -self.config.reverse_drive_command
-            curvature = self.obstacle_curvature
-            elapsed = self._state_elapsed(obs)
-            distance = obs.odometer_in - self.state_started_odometer
-            if (
-                distance >= self.config.reverse_recovery_distance_in
-                or elapsed >= self.config.reverse_recovery_timeout_s
-            ):
-                self.obstacle_heading_reference_deg = obs.yaw_deg
-                self.obstacle_settle_s = 0.0
-                self.stall_s = 0.0
-                self._transition(
-                    ControllerState.OBSTACLE,
-                    obs,
-                    "reverse recovery complete; retrying obstacle",
-                )
-                drive = self.config.obstacle_drive_command
-
-        elif self.state == ControllerState.FAULT:
-            drive = 0.0
-            curvature = 0.0
-
-        curvature = clamp(
-            curvature,
-            -self.config.maximum_curvature_per_in,
-            self.config.maximum_curvature_per_in,
-        )
-        self.curvature_command = curvature
+        curvature = math.tan(math.radians(wheel_angle)) / self.config.wheelbase_in
         self.last_drive_command = drive
-        self.last_odometer_in = obs.odometer_in
         return ControlOutput(
             state=self.state,
             drive_command=drive,
-            steering_wheel_deg=self._curvature_to_wheel_angle(curvature),
+            steering_wheel_deg=wheel_angle,
             curvature_per_in=curvature,
-            line_confidence=self.line_confidence,
+            line_confidence=confidence,
             reason=self.reason,
+        )
+
+    def update(self, obs: Observation) -> ControlOutput:
+        if (
+            abs(self.last_drive_command) >= self.config.curve_drive_command
+            and obs.drive_motor_disagreement_deg
+            > self.config.motor_disagreement_limit_deg
+        ):
+            self.disagreement_s += obs.dt
+        else:
+            self.disagreement_s = 0.0
+
+        if self.disagreement_s >= self.config.motor_disagreement_trigger_s:
+            self.state = ControllerState.FAULT
+            self.reason = "coupled drive motor encoders disagree"
+
+        if self.state == ControllerState.FAULT:
+            return self._output(0.0, 0.0, 0.0)
+
+        line_sign = self._line_sign(obs)
+
+        if obs.line_left and obs.line_right:
+            self.state = ControllerState.TRACK
+            self.reason = "both sensors see black; driving straight"
+            self.line_lost_since = None
+            return self._output(self.config.cruise_drive_command, 0.0, 1.0)
+
+        if line_sign != 0:
+            self.state = ControllerState.TRACK
+            self.last_line_sign = line_sign
+            self.line_lost_since = None
+            direction = "left" if line_sign < 0 else "right"
+            self.reason = (
+                f"only the {direction} sensor sees black; "
+                f"commanding full {direction} steering"
+            )
+            return self._output(
+                self.config.curve_drive_command,
+                line_sign * self.config.maximum_wheel_angle_deg,
+                0.75,
+            )
+
+        if self.state == ControllerState.ACQUIRE or self.last_line_sign == 0:
+            self.state = ControllerState.ACQUIRE
+            self.reason = "waiting for a line at startup"
+            self.line_lost_since = None
+            return self._output(0.0, 0.0, 0.0)
+
+        if self.line_lost_since is None:
+            self.line_lost_since = obs.now
+        lost_for = max(0.0, obs.now - self.line_lost_since)
+        if lost_for >= self.config.line_loss_stop_s:
+            self.state = ControllerState.FAULT
+            self.reason = "line remained lost; stopping instead of steering indefinitely"
+            return self._output(0.0, 0.0, 0.0)
+
+        self.state = ControllerState.TRACK
+        direction = "left" if self.last_line_sign < 0 else "right"
+        self.reason = (
+            f"both sensors are white; continuing full {direction} correction "
+            "toward the last observed line side"
+        )
+        confidence = clamp(1.0 - lost_for / self.config.line_loss_stop_s, 0.0, 1.0)
+        return self._output(
+            self.config.curve_drive_command,
+            self.last_line_sign * self.config.maximum_wheel_angle_deg,
+            confidence,
         )
 
 
 class HardwareRobot:
-    """Build HAT, Grove Base HAT, and IMU adapter."""
+    """Build HAT, Grove line-sensor, and button adapter."""
 
     def __init__(self, hardware: HardwareConfig, config: RobotConfig):
         hardware.validate()
@@ -1244,17 +882,6 @@ class HardwareRobot:
         except ImportError as error:
             self._raise_import_error("Grove push-button driver", error)
 
-        try:
-            from basehat.IMUSensor import GroveIMU9DOFICM20600
-        except ImportError as error:
-            self._raise_import_error("Grove IMU Python driver", error)
-        except SystemExit as error:
-            raise RuntimeError(
-                "The Grove IMU driver was found, but its native libakicm.so "
-                "library could not be loaded. Restore/install the course IMU "
-                "driver on the Raspberry Pi before running the robot."
-            ) from error
-
         print("Initializing Build HAT motors; this can take about 10 seconds...")
         self.drive_motor_1 = Motor(hardware.drive_motor_1_port.upper())
         self.drive_motor_2 = Motor(hardware.drive_motor_2_port.upper())
@@ -1268,11 +895,6 @@ class HardwareRobot:
             pull_up=False,
             bounce_time=0.05,
         )
-        # Initialize only the accelerometer/gyroscope chip. The public
-        # IMUSensor wrapper also initializes and writes to the AK09918
-        # magnetometer, which this robot intentionally does not use.
-        self.imu = GroveIMU9DOFICM20600()
-
         self._last_drive_command: Optional[float] = None
         self._last_steering_command: Optional[float] = None
         self._last_steering_position = 0.0
@@ -1284,12 +906,6 @@ class HardwareRobot:
         self._distance_in = 0.0
         self._odometer_in = 0.0
         self._filtered_speed_ips = 0.0
-        self._yaw_deg = 0.0
-        self._gyro_bias = (0.0, 0.0, 0.0)
-        self._pitch_zero = 0.0
-        self._roll_zero = 0.0
-        self._gravity_mps2 = 9.81
-
         self.stop_all()
         self._initialize_encoder_reference()
 
@@ -1316,14 +932,6 @@ class HardwareRobot:
             raise RuntimeError("an angular motor with an absolute encoder is required")
         return float(values[0]), float(values[1]), float(values[2])
 
-    @staticmethod
-    def _imu_angles(acceleration: Sequence[float]) -> tuple[float, float]:
-        ax, ay, az = (float(value) for value in acceleration)
-        down = math.copysign(max(abs(ay), 1e-6), ay)
-        pitch = math.degrees(math.atan2(-ax, abs(down)))
-        roll = math.degrees(math.atan2(az, abs(down)))
-        return pitch, roll
-
     def _initialize_encoder_reference(self) -> None:
         _, position_1, _ = self._motor_values(self.drive_motor_1)
         _, position_2, _ = self._motor_values(self.drive_motor_2)
@@ -1341,38 +949,9 @@ class HardwareRobot:
             f"{steering_absolute:.1f} degrees."
         )
 
-    def calibrate_imu(self) -> None:
-        print(
-            f"Keep the robot still and level for {self.config.imu_calibration_s:.1f} "
-            "seconds while the IMU is calibrated..."
-        )
-        gyro_samples: list[tuple[float, float, float]] = []
-        pitch_samples: list[float] = []
-        roll_samples: list[float] = []
-        gravity_samples: list[float] = []
-        deadline = time.monotonic() + self.config.imu_calibration_s
-        while time.monotonic() < deadline:
-            gyro = tuple(float(value) for value in self.imu.get_gyro())
-            acceleration = tuple(
-                float(value) / 100.0 for value in self.imu.get_accel()
-            )
-            pitch, roll = self._imu_angles(acceleration)
-            gyro_samples.append(gyro)
-            pitch_samples.append(pitch)
-            roll_samples.append(roll)
-            gravity_samples.append(math.sqrt(sum(value * value for value in acceleration)))
-            time.sleep(0.01)
-        if len(gyro_samples) < 20:
-            raise RuntimeError("not enough IMU samples were received during calibration")
-        count = float(len(gyro_samples))
-        self._gyro_bias = tuple(
-            sum(sample[axis] for sample in gyro_samples) / count for axis in range(3)
-        )
-        self._pitch_zero = sum(pitch_samples) / count
-        self._roll_zero = sum(roll_samples) / count
-        self._gravity_mps2 = sum(gravity_samples) / count
+    def prepare_for_control(self) -> None:
         self._last_time = time.monotonic()
-        print("IMU calibration complete.")
+        print("Straight-line sensors ready; IMU is not used.")
 
     def read(self, debouncer: LineDebouncer) -> Observation:
         now = time.monotonic()
@@ -1404,17 +983,6 @@ class HardwareRobot:
         normalized_2 = position_2 - self._position_2_zero
         disagreement = abs(normalized_1 - normalized_2)
 
-        acceleration = tuple(
-            float(value) / 100.0 for value in self.imu.get_accel()
-        )
-        gyro = tuple(float(value) for value in self.imu.get_gyro())
-        pitch_raw, roll_raw = self._imu_angles(acceleration)
-        pitch = self.hardware.pitch_direction * (pitch_raw - self._pitch_zero)
-        roll = self.hardware.roll_direction * (roll_raw - self._roll_zero)
-        yaw_rate = self.hardware.yaw_direction * (gyro[1] - self._gyro_bias[1])
-        self._yaw_deg += yaw_rate * dt
-        acceleration_norm = math.sqrt(sum(value * value for value in acceleration))
-
         # Grove line finders output 0 over black and 1 over white. Controller
         # booleans mean "black line detected", so explicitly invert the raw
         # digital values instead of relying on GPIO active-state semantics.
@@ -1435,11 +1003,11 @@ class HardwareRobot:
             drive_speed_2=speed_2,
             drive_motor_disagreement_deg=disagreement,
             steering_motor_deg=steering,
-            yaw_deg=self._yaw_deg,
-            yaw_rate_dps=yaw_rate,
-            pitch_deg=pitch,
-            roll_deg=roll,
-            acceleration_deviation_mps2=abs(acceleration_norm - self._gravity_mps2),
+            yaw_deg=0.0,
+            yaw_rate_dps=0.0,
+            pitch_deg=0.0,
+            roll_deg=0.0,
+            acceleration_deviation_mps2=0.0,
         )
 
     def apply(self, output: ControlOutput) -> None:
@@ -1588,7 +1156,7 @@ class CsvRunLogger:
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Robust solid, dashed, curved, and obstacle line following"
+        description="Simple bang-bang following for one straight black line"
     )
     parser.add_argument("--drive-motor-1-port", choices="ABCD", default="C")
     parser.add_argument("--drive-motor-2-port", choices="ABCD", default="D")
@@ -1610,14 +1178,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=1,
         help="motor/encoder direction; defaults to 1 for the current linkage",
     )
-    parser.add_argument(
-        "--yaw-direction",
-        type=require_direction,
-        default=1,
-        help="choose the sign that makes a right turn positive",
-    )
-    parser.add_argument("--pitch-direction", type=require_direction, default=1)
-    parser.add_argument("--roll-direction", type=require_direction, default=1)
     parser.add_argument(
         "--library-directory",
         type=Path,
@@ -1723,9 +1283,6 @@ def run(args: argparse.Namespace) -> int:
         drive_motor_1_direction=args.drive_motor_1_direction,
         drive_motor_2_direction=args.drive_motor_2_direction,
         steering_direction=args.steering_direction,
-        yaw_direction=args.yaw_direction,
-        pitch_direction=args.pitch_direction,
-        roll_direction=args.roll_direction,
     )
     hardware_config.validate()
 
@@ -1741,7 +1298,7 @@ def run(args: argparse.Namespace) -> int:
 
     try:
         robot = HardwareRobot(hardware_config, config)
-        robot.calibrate_imu()
+        robot.prepare_for_control()
         robot.stop_all()
 
         if not args.no_keyboard_control:
