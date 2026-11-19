@@ -34,14 +34,14 @@ HILL_DURATION = 1.5
 
 # ---------- Calibration ----------
 
-print("Calibration")
+print("Begin Calibration.")
 print()
 
-input("Center the front wheels, then press ENTER...")
+input("Please center the front wheels, then press ENTER...")
 
 STEERING_CENTER = steering_motor.get_position()
 
-input("Close the payload door, then press ENTER...")
+input("Please close the payload door, then press ENTER...")
 
 PAYLOAD_CLOSED = payload_motor.get_position()
 PAYLOAD_OPEN = PAYLOAD_CLOSED + PAYLOAD_OPEN_ANGLE
@@ -49,10 +49,10 @@ PAYLOAD_OPEN = PAYLOAD_CLOSED + PAYLOAD_OPEN_ANGLE
 print()
 print(f"Steering center: {STEERING_CENTER}")
 print(f"Payload closed position: {PAYLOAD_CLOSED}")
-print("Calibration complete.")
+print("Calibration is complete.")
 print()
 
-input("Press ENTER to begin operation...")
+input("Please press the button to begin operation...")
 
 # ---------- State ----------
 
@@ -107,8 +107,8 @@ def deploy_payload():
     if payload_deployed:
         return
 
-    print("Beacon detected.")
-    print("Deploying payload.")
+    print("Magnetic Beacon Detected!.")
+    print("Deploying payload...")
 
     drive_motor.stop()
 
@@ -116,13 +116,13 @@ def deploy_payload():
 
     # Allow payload time to clear robot
 
-    time.sleep(1.5)
+    time.sleep(3)
 
     payload_motor.run_to_position(PAYLOAD_CLOSED)
 
     payload_deployed = True
 
-    print("Payload deployed.")
+    print("Payload Deployed. Continuing Operation...")
 
 # ---------- Main ----------
 
